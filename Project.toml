@@ -1,0 +1,13 @@
+name = "ESM_PINO"
+uuid = "0812bf53-9fd7-49da-8b9b-5b8cac2079bc"
+authors = ["Giacomo Veneri <giacomo.veneri@tum.de>"]
+version = "1.0.0-DEV"
+
+[compat]
+julia = "1.11.2"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
