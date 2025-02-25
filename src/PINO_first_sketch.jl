@@ -1,5 +1,5 @@
 using Lux, LuxCUDA, Random, Optimisers, Zygote, Statistics, MLUtils, ParameterSchedulers, Printf, CairoMakie, FFTW, NNlib, ChainRulesCore
-using ComponentArrays  # Helps with structured parameter handling
+using ComponentArrays, OnlineStats  # Helps with structured parameter handling
 
 include("NewRepeatedLayer.jl")
 
@@ -122,52 +122,37 @@ end
 
 Implements a channel-wise MLP with a skip connection.
 """
-struct ChannelMLP{C,E,A} <: Lux.AbstractLuxLayer
-    channels::C
-    expansion_factor::E
-    activation::A
+struct ChannelMLP{M,S} <: Lux.AbstractLuxLayer
+    mlp::M
+    skip::S
 end
 
-ChannelMLP(channels::Int; expansion_factor=0.5, activation=gelu) =
-    ChannelMLP(channels, expansion_factor, activation)
+function ChannelMLP(channels::Int; expansion_factor=0.5, activation=gelu)
+    hidden_ch = Int(expansion_factor * channels)
+    mlp = Chain(
+        Conv((1, 1), channels => hidden_ch, activation),
+        Conv((1, 1), hidden_ch => channels)
+    )
+    skip = SoftGating(channels)
+    return ChannelMLP(mlp, skip)
+end
 
 function Lux.initialparameters(rng::AbstractRNG, layer::ChannelMLP)
-    in_ch = layer.channels
-    hidden_ch = Int(layer.expansion_factor * in_ch)
-    mlp = Chain(
-        Conv((1, 1), in_ch => hidden_ch, layer.activation),
-        Conv((1, 1), hidden_ch => in_ch)
-    )
-    skip = SoftGating(in_ch)
-    ps_mlp = Lux.initialparameters(rng, mlp)
-    ps_skip = Lux.initialparameters(rng, skip)
+    ps_mlp = Lux.initialparameters(rng, layer.mlp)
+    ps_skip = Lux.initialparameters(rng, layer.skip)
     return (mlp=ps_mlp, skip=ps_skip)
 end
 
 function Lux.initialstates(rng::AbstractRNG, layer::ChannelMLP)
-    in_ch = layer.channels
-    hidden_ch = Int(layer.expansion_factor * in_ch)
-    mlp = Chain(
-        Conv((1, 1), in_ch => hidden_ch, layer.activation),
-        Conv((1, 1), hidden_ch => in_ch)
-    )
-    skip = SoftGating(in_ch)
-    st_mlp = Lux.initialstates(rng, mlp)
-    st_skip = Lux.initialstates(rng, skip)
+    st_mlp = Lux.initialstates(rng, layer.mlp)
+    st_skip = Lux.initialstates(rng, layer.skip)
     return (mlp=st_mlp, skip=st_skip)
 end
 
-function (layer::ChannelMLP)(x, ps, st::NamedTuple)
-    y_mlp, st_mlp = Lux.apply(
-        Chain(
-            Conv((1,1), layer.channels => Int(layer.expansion_factor * layer.channels), layer.activation),
-            Conv((1,1), Int(layer.expansion_factor * layer.channels) => layer.channels)
-        ),
-        x, ps.mlp, st.mlp::NamedTuple
-    )
-    
-    y_skip, st_skip = Lux.apply(SoftGating(layer.channels), x, ps.skip, st.skip::NamedTuple)
-    return y_mlp + y_skip, (mlp=st_mlp, skip=st_skip)
+function (layer::ChannelMLP)(x, ps, st)
+    y_mlp, st_mlp = layer.mlp(x, ps.mlp, st.mlp)
+    y_skip, st_skip = layer.skip(x, ps.skip, st.skip)
+    return y_mlp .+ y_skip, (mlp=st_mlp, skip=st_skip)
 end
 
 """
@@ -293,7 +278,7 @@ function FourierNeuralOperator(;
 end
 
 function Lux.initialparameters(rng::AbstractRNG, layer::FourierNeuralOperator)
-    ps_embedding = isnothing(layer.embedding) ? nothing : Lux.initialparameters(rng, layer.embedding)
+    ps_embedding = isnothing(layer.embedding) ? NamedTuple() : Lux.initialparameters(rng, layer.embedding)
     ps_lifting = Lux.initialparameters(rng, layer.lifting)
     ps_fno_blocks = Lux.initialparameters(rng, layer.fno_blocks)
     ps_projection = Lux.initialparameters(rng, layer.projection)
@@ -306,7 +291,7 @@ function Lux.initialparameters(rng::AbstractRNG, layer::FourierNeuralOperator)
 end
 
 function Lux.initialstates(rng::AbstractRNG, layer::FourierNeuralOperator)
-    st_embedding = isnothing(layer.embedding) ? nothing : Lux.initialstates(rng, layer.embedding)
+    st_embedding = isnothing(layer.embedding) ? NamedTuple() : Lux.initialstates(rng, layer.embedding)
     st_lifting = Lux.initialstates(rng, layer.lifting)
     st_fno_blocks = Lux.initialstates(rng, layer.fno_blocks)
     st_projection = Lux.initialstates(rng, layer.projection)
@@ -333,137 +318,69 @@ function (layer::FourierNeuralOperator)(x, ps, st::NamedTuple)
 end
 
 # Example usage
-#=
-fno = FourierNeuralOperator(in_channels=16, out_channels=1, hidden_channels=32, n_modes=(16, 16))
+const gdev = gpu_device()
+const cdev = cpu_device()
+fno = FourierNeuralOperator(in_channels=1, out_channels=1, hidden_channels=8, n_modes=(16, 16))
 rng = Random.default_rng()
 ps, st = Lux.initialparameters(rng, fno), Lux.initialstates(rng, fno)
-x = randn(Float32, 32, 32, 16, 4)
+#expected shape of the input is (spatial..., in_channels, batch)
+#note that spatial must be >= n_modes for the spectral convolution to work
+x = randn(Float32, 16, 16, 1, 128)
 y, _ = fno(x, ps, st)
+#output shape is (spatial..., out_channels, batch)
 println("Output size: ", size(y))
-=#
 
-using MAT
-
-"""
-
-Burgers' equation dataset from
-[fourier_neural_operator](https://github.com/zongyi-li/fourier_neural_operator)
-
-mapping between initial conditions to the solutions at the last point of time \
-evolution in some function space.
-
-u(x,0) -> u(x, time_end):
-
-    * `a`: initial conditions u(x,0)
-    * `u`: solutions u(x,t_end)
-"""
-filepath2 = "C:/Users/jackv/Downloads/Burgers_R10/burgers_data_R10.mat"
-
-const N = 2048
-const Δsamples = 2^3
-const grid_size = div(2^13, Δsamples)
-const T = Float32
-
-file = matopen(filepath2)
-x_data = reshape(T.(collect(read(file, "a")[1:N, 1:Δsamples:end])), 1, :, 1, N)
-y_data = reshape(T.(collect(read(file, "u")[1:N, 1:Δsamples:end])), 1, :, 1, N)
-#x = T.(collect(read(file, "a")[1:end, 1:end]))
-#x_data = reshape(x, 1, 8192, 1, 2048)
-#y = T.(collect(read(file, "u")[1:end, 1:end]))
-#y_data = reshape(y, 1, 8192, 1, 2048)
-close(file)
-
-grid = reshape(T.(collect(range(0, 1; length=grid_size))'), :, grid_size , 1, 1)
-time_grid = reshape(T.(collect(range(0, 1; length=2))'), 1, 2, 1, 1) 
-
-const cdev = cpu_device()
-const gdev = gpu_device()
-
-#call FourierNeuralOperator here with the correct parameters
-fno = FourierNeuralOperator(in_channels=1, out_channels=1, hidden_channels=8, n_modes=(1, 8), n_layers=2)
-ps, st = Lux.setup(Random.default_rng(), fno) |> gdev;
-
-x_data_dev = x_data |> gdev
-y_data_dev = y_data |> gdev
-grid_dev = grid |> gdev
-time_grid_dev = time_grid |> gdev
-
-# Define the Burgers' equation residual
-function burgers_residual(model, x, t, ν)
-    u = first(model((x, t), ps, st))
-    u_x = gradient(x -> (model(x, t)), x)[1]  #define u(x,t)
-    u_t = gradient(t -> (model(x, t)), t)[1]
-    u_xx = gradient(x -> gradient(x -> model(x, t), x)[1], x)[1]
-    residual = u_t + u .* u_x - ν * u_xx
-    return residual
+function mse_loss_function(u::StatefulLuxLayer, target::AbstractArray, xt::AbstractArray)
+    return MSELoss()(u(xt), target)
 end
 
-# Define the physics-informed loss
-function physics_informed_loss(model, ps, st, x, t, ν)
-    residual = burgers_residual(model, x, t, ν)
-    return mean(residual .^ 2)
+function loss_function(model, ps, st,(xt, target_data))
+    u_net = StatefulLuxLayer{true}(model, ps, st)
+    data_loss = mse_loss_function(u_net, target_data, xt)
+    return (data_loss,
+        (st),
+        (; data_loss)
+    )
 end
 
-# Define the combined loss function
-function combined_loss(model, ps, st, ((x, t), u_true), ν)
-    # Data-driven loss
-    u_pred, st = model(x, ps, st)
-    loss = MSELoss()
-    data_loss = loss(u_pred, u_true)
+target = randn(Float32, 16, 16, 1, 128)
+
+loss_function(fno, ps, st, (x, target))
+
+function train_model(x, target; seed::Int=0,
+    maxiters::Int=1000, hidden_channels::Int=8)
+    rng = Random.default_rng(seed)
+    fno = FourierNeuralOperator(in_channels=1, out_channels=1, hidden_channels=hidden_channels, n_modes=(16, 16))
+    ps, st = Lux.setup(rng, fno) 
     
-    # Physics-informed loss
-    physics_loss = physics_informed_loss(model, ps, st, x, t, ν)
-    
-    # Weighted combination
-    α = 0.5  # Weight for physics loss (can be tuned)
-    return (1 - α) * data_loss + α * physics_loss, st
-end
+    dataloader = DataLoader((x, target); batchsize=32, shuffle=true) 
 
-# Training loop
-function train_model!(model, ps, st, data, ν; epochs=100)
-    opt = Adam(0.0001f0)
-    train_state = Training.TrainState(model, ps, st, opt)
+    train_state = Training.TrainState(fno, ps, st, Adam(0.001f0))
 
-    for epoch in 1:epochs
-        # Compute loss and gradients
-        loss, grad = Zygote.withgradient(ps -> combined_loss(model, ps, st, data, ν), train_state.parameters)
+    loss_tracker, = ntuple(_ -> Lag(Float32, 32),1)
+    iter = 1
+    for (xt, target_data) in Iterators.cycle(dataloader)
+        -, loss, stats, train_state = Training.single_train_step!(AutoZygote(), loss_function, (xt, target_data), train_state)
         
-        # Update model parameters
-        train_state = Training.update!(train_state, grad[1])
+        fit!(loss_tracker, loss)
         
-        # Print loss
-        if epoch % 25 == 1 || epoch == epochs
-            @printf("Epoch %d: loss = %.6e\n", epoch, loss)
+        mean_loss = mean(OnlineStats.value(loss_tracker))
+
+        isnan(loss) && throw(ArgumentError("NaN Loss Detected"))
+        
+        if iter % 1 == 0 || iter == maxiters
+            @printf "Iteration: [%5d / %5d] \t Loss: %.9f (%.9f)\n" iter maxiters loss mean_loss
         end
-    end
+        
+        iter += 1
+        
+        if iter > maxiters
+            break
+        end
 
-    return train_state.parameters, train_state.states
+    end
+    return StatefulLuxLayer{true}(fno, cdev(train_state.parameters), cdev(train_state.states))
 end
 
-# Train the model
-ν = 0.01f0  # Viscosity coefficient
-ps_trained, st_trained = train_model!(fno, ps, st, ((x_data_dev, grid_dev), y_data_dev), ν)
-
-# Visualize the results
-#pred = first(fno((x_data_dev, grid_dev), ps_trained, st_trained)) |> cdev
-pred, _ = fno((x_data_dev, grid_dev), ps_trained, st_trained) 
-pred = pred |> cdev  
-
-fig = Figure(; size=(1024, 1024))
-axs = [Axis(fig[i, j]) for i in 1:4, j in 1:4]
-for i in 1:4, j in 1:4
-    idx = i + (j - 1) * 4
-    ax = axs[i, j]
-    l1 = lines!(ax, vec(grid), pred[idx, :, 1])
-    l2 = lines!(ax, vec(grid), y_data[idx, :, 1])
-
-    i == 4 && (ax.xlabel = "x")
-    j == 1 && (ax.ylabel = "u(x)")
-
-    if i == 1 && j == 1
-        axislegend(ax, [l1, l2], ["Predictions", "Ground Truth"])
-    end
-end
-linkaxes!(axs...)
-fig[0, :] = Label(fig, "Burgers Equation using PINO"; tellwidth=false, font=:bold)
-fig
+trained_model = train_model(x, target)
+trained_u = Lux.testmode(StatefulLuxLayer{true}(trained_model.model, trained_model.ps, trained_model.st))
