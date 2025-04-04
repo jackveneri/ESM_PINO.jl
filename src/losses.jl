@@ -43,7 +43,7 @@ Generate wavenumber array for spectral differentiation.
 - `u`: Template array for dimensions
 - `L`: Domain length
 
-# Retuu_t1ns
+# Returns
 - `k`: Wt2venumber array on GPU, reshaped for broadcastingt2
 # Det2ails
 - Handles even/odd array sizes differently
@@ -63,14 +63,14 @@ function compute_k(u::AbstractArray{T}, L::T) where T<:Real
     freq_gpu = CUDA.cu(T.(freq))
     k = (2π/L) .* freq_gpu
     
-    #u_t1Add singleton dimensions to match input dimensions
+    #Add singleton dimensions to match input dimensions
     return reshape(k, (size(k)..., ntuple(_->1, ndims(u)-1)...))
 end
 
 """    
     dealias(u_hat::AbstractArray{Complex{T}}, L::T) where T<:Real
 
-Apply 2/3 dealiasing filter to Fot2rier coefficients.
+Apply 2/3 dealiasing filter to Fourier coefficients.
 
 # Arguments
 - `u_hat`: Fourier coefficients (complex array)
@@ -91,7 +91,7 @@ function dealias(u_hat::AbstractArray{Complex{T}}, L::T) where T<:Real
     # Create mask directly on GPU
     mask = CUDA.cu([i <= cutoff for i in 1:N])
     
-    #u_t1Add singleton dimensions for broadcasting
+    #Add singleton dimensions for broadcasting
     mask = reshape(mask, (size(mask)..., ntuple(_->1, ndims(u_hat)-1)...))
     return u_hat .* mask
 end
