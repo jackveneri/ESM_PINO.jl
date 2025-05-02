@@ -1,8 +1,13 @@
+"""
+    NewRepeatedLayer{L}(layer::L, repeats::Int)
+Defines a new layer that applies the given layer `repeats` times in sequence.
+"""
 struct NewRepeatedLayer{L} <: Lux.AbstractLuxLayer
     layer::L
     repeats::Int
 end
 
+#=
 function Lux.setup(rng::AbstractRNG, layer::NewRepeatedLayer)
     # Initialize parameters and states for each repeated layer
     ps = []
@@ -20,12 +25,36 @@ function Lux.setup(rng::AbstractRNG, layer::NewRepeatedLayer)
 
     return parameters, state
 end
+=#
 
-function Lux.apply(layer::NewRepeatedLayer, x, ps, st::NamedTuple)
+function Lux.initialparameters(rng::AbstractRNG, layer::NewRepeatedLayer)
+    # Initialize parameters for each repeated layer
+    ps = []
+    for i in 1:layer.repeats
+        push!(ps, Lux.initialparameters(rng, layer.layer))
+    end
+    block_keys = Tuple(Symbol("block_$i") for i in 1:layer.repeats)
+    parameters = NamedTuple{block_keys}(ps)
+    return parameters
+end
+
+function Lux.initialstates(rng::AbstractRNG, layer::NewRepeatedLayer)
+    # Initialize states for each repeated layer
+    st = []
+    for i in 1:layer.repeats
+        push!(st, Lux.initialstates(rng, layer.layer))
+    end
+    block_keys = Tuple(Symbol("block_$i") for i in 1:layer.repeats)
+    state = NamedTuple{block_keys}(st)
+    return state
+    
+end
+
+function (layer::NewRepeatedLayer)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     updated_st = NamedTuple()
     # Apply each repeated layer in sequence
     for key in keys(ps)
-        x, new_block_st = Lux.apply(layer.layer, x, ps[key], st[key])
+        x, new_block_st = layer.layer(x, ps[key], st[key])
         # Rebuild the NamedTuple with the updated state for this block
         updated_st = merge(updated_st, NamedTuple{(key,)}((new_block_st,)))
     end

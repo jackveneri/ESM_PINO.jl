@@ -1,3 +1,10 @@
 /Manifest.toml
 /docs/Manifest.toml
 /docs/build/
+/burgers_results_test.jld2
+/burgers_results.jld2
+/data/ERA5-sf-t21q.nc
+/data/t21-precomputed-p.jld2
+/data/t21-precomputed-q.jld2
+/data/t21-precomputed-S.jld2
+/data/t21-precomputed-sf.jld2

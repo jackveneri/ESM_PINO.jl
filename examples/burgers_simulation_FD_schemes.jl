@@ -1,6 +1,8 @@
-include("FD_schemes.jl")
+using Pkg
+Pkg.activate(".") # Activate the project environment
+Pkg.instantiate() # Install dependencies
 
-using FFTW, Plots, Random, JLD2, OrdinaryDiffEq
+using ESM_PINO, FFTW, Plots, Random, JLD2, OrdinaryDiffEq, SparseArrays
 
 function sample_initial_condition(N::Int; L::Float64=1.0)            
     dx = L / N         # Spatial resolution
@@ -38,7 +40,6 @@ function sample_initial_condition(N::Int; L::Float64=1.0)
     return x, u0
 end
 
-using 
 N = 512
 L = 1.0
 x, u0 = sample_initial_condition(N-1, L=L)

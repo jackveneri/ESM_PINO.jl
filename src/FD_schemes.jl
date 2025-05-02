@@ -1,4 +1,3 @@
-using LinearAlgebra, SparseArrays
 """
     Grid{T}
 
@@ -71,7 +70,10 @@ function PeriodicFD(T::DataType, n::Integer, Δx::Number=1)
 end 
 
 PeriodicFD(grid::Grid{T}) where T = PeriodicFD(T, grid.N, grid.Δx)
-
+"""
+    BurgersFD{T}
+Finite Difference Scheme matrix for the Burgers equation with Periodic Boundary Conditions
+"""
 struct BurgersFD{T} <: AbstractFiniteDifferencesScheme{T}
     M::T
     M2::T
@@ -117,7 +119,10 @@ function BurgersFD_Dirichlet(T::DataType, n::Integer, Δx::Number=1)
 end
 
 BurgersFD_Dirichlet(grid::Grid{T}) where T = BurgersFD_Dirichlet(T, grid.N, grid.Δx)
-
+"""
+    BurgersFD2{T}
+Finite Difference Scheme matrix for the Burgers equation with Periodic Boundary Conditions
+"""
 struct BurgersFD2{T} <: AbstractFiniteDifferencesScheme{T}
     M::T
     M2::T

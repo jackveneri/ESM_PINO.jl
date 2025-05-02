@@ -1,37 +1,49 @@
-include("FNO1D_components.jl")
-include("FNO_components.jl")
-
 struct NoOpLayer <: Lux.AbstractLuxLayer end
 
 Lux.initialparameters(rng::AbstractRNG, ::NoOpLayer) = NamedTuple()
 Lux.initialstates(rng::AbstractRNG, ::NoOpLayer) = NamedTuple()
-(l::NoOpLayer)(x, ps, st) = (x, st)
+(l::NoOpLayer)(x::AbstractArray, ps::NamedTuple, st::NamedTuple) = (x, st)
 LuxCore.parameterlength(::NoOpLayer) = 0
 
 """
     FourierNeuralOperator
 
 A layer that combines the Fourier Neural Operator (FNO) with positional embeddings, spectral kernels, and channel MLPs.
+
+## Arguments
+- `in_channels::Int`: Number of input channels.
+- `out_channels::Int`: Number of output channels.
+- `hidden_channels::Int`: Number of hidden channels in the FNO blocks.
+- `n_modes::NTuple{N,Integer}`: Number of Fourier modes in each dimension (default is (16, 16)).
+- `n_layers::Int`: Number of FNO blocks (default is 4).
+- `lifting_channel_ratio::Int`: Ratio for the lifting layer (default is 2). 
+- `projection_channel_ratio::Int`: Ratio for the projection layer (default is 2).
+- `channel_mlp_expansion::Number`: Expansion factor for the channel MLP (default is 0.5).
+- `activation`: Activation function (default is `NNlib.gelu`).
+- `positional_embedding::AbstractString`: Type of positional embedding to use (default is "grid"). Options are "grid", "no_grid", "grid1D", "no_grid1D", "grid3D", and "no_grid3D".
+
+## Returns
+- `FourierNeuralOperator`: A layer that combines the Fourier Neural Operator with the specified configurations.
 """
 struct FourierNeuralOperator <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :fno_blocks, :projection)}
-    embedding
-    lifting
-    fno_blocks 
-    projection
+    embedding ::Union{NoOpLayer, GridEmbedding2D, GridEmbedding1D, GridEmbedding3D}
+    lifting ::Lux.AbstractLuxLayer
+    fno_blocks ::Union{NewRepeatedLayer{FNO_Block{N}}, NewRepeatedLayer{FNO_Block1D{N}}, NewRepeatedLayer{FNO_Block3D{N}}} where N
+    projection ::Lux.AbstractLuxLayer
 end
 
 function FourierNeuralOperator(;
-    in_channels,
-    out_channels,
-    hidden_channels=32,
-    n_modes=(16, 16),
-    n_layers=4,
-    lifting_channel_ratio=2,
-    projection_channel_ratio=2,
-    channel_mlp_expansion=0.5,
+    in_channels::Int,
+    out_channels::Int,
+    hidden_channels::Int=32,
+    n_modes::NTuple{N,Integer}=(16, 16),
+    n_layers::Int=4,
+    lifting_channel_ratio::Int=2,
+    projection_channel_ratio::Int=2,
+    channel_mlp_expansion::Number=0.5,
     activation=NNlib.gelu,
-    positional_embedding="grid",
-)
+    positional_embedding::AbstractString="grid",
+) where N
     n_dim = length(n_modes)
     embedding = nothing
     if positional_embedding in ["grid","no_grid"]
@@ -73,7 +85,28 @@ function FourierNeuralOperator(;
             
             fno_blocks = NewRepeatedLayer(FNO_Block1D(hidden_channels, n_modes; expansion_factor=channel_mlp_expansion, activation=activation), n_layers)
         else
+            if positional_embedding in ["grid3D", "no_grid3D"]
+                if positional_embedding == "grid3D"
+                    embedding = GridEmbedding3D()
+                    in_channels += n_dim
+                else
+                    embedding = NoOpLayer()
+                end
+                
+                lifting = Chain(
+                    Conv((1, 1, 1), in_channels => Int(lifting_channel_ratio * hidden_channels), activation),
+                    Conv((1, 1, 1), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, activation),
+                )
+                
+                projection = Chain(
+                    Conv((1, 1, 1), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation),
+                    Conv((1, 1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels),
+                )
+                
+                fno_blocks = NewRepeatedLayer(FNO_Block3D(hidden_channels, n_modes; expansion_factor=channel_mlp_expansion, activation=activation), n_layers)
+            else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'grid1D'."))
+            end
         end
     end
     return FourierNeuralOperator(embedding, lifting, fno_blocks, projection)
@@ -105,7 +138,7 @@ function Lux.initialstates(rng::AbstractRNG, layer::FourierNeuralOperator)
     )
 end
 
-function (layer::FourierNeuralOperator)(x, ps, st::NamedTuple)
+function (layer::FourierNeuralOperator)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     if !isnothing(layer.embedding)
         x, st_embedding = layer.embedding(x, ps.embedding, st.embedding)
     else

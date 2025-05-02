@@ -1,8 +1,3 @@
-using Lux, LuxCUDA, Random, Optimisers, Zygote, Statistics, MLUtils, ParameterSchedulers, FFTW, NNlib, ChainRulesCore
-using ComponentArrays
-
-include("NewRepeatedLayer.jl")
-
 """
     SpectralConv{T,N}
 
@@ -110,7 +105,7 @@ struct SpectralKernel{P,F} <: Lux.AbstractLuxLayer
     activation::F    # Activation function
 end
 
-function SpectralKernel(ch::Pair{<:Integer,<:Integer}, modes::NTuple{N,Integer}, activation=NNlib.gelu) where N
+function SpectralKernel(ch::Pair{<:Integer,<:Integer}, modes::NTuple{2,Integer}, activation=NNlib.gelu) 
     in_ch, out_ch = ch
     conv = Conv((1,1), in_ch => out_ch, pad=0)
     spectral = SpectralConv(in_ch, out_ch, modes)
@@ -154,7 +149,7 @@ function Lux.initialstates(rng::AbstractRNG, layer::SoftGating)
     return NamedTuple()
 end
 
-function (layer::SoftGating)(x, ps, st::NamedTuple)
+function (layer::SoftGating)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     return ps.weight .* x, st
 end
 
@@ -190,7 +185,7 @@ function Lux.initialstates(rng::AbstractRNG, layer::ChannelMLP)
     return (mlp=st_mlp, skip=st_skip)
 end
 
-function (layer::ChannelMLP)(x, ps, st)
+function (layer::ChannelMLP)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     y_mlp, st_mlp = layer.mlp(x, ps.mlp, st.mlp)
     y_skip, st_skip = layer.skip(x, ps.skip, st.skip)
     return y_mlp + y_skip, (mlp=st_mlp, skip=st_skip)
@@ -271,7 +266,7 @@ function Lux.initialstates(rng::AbstractRNG, block::FNO_Block)
     return (spectral_kernel=st_spectral, channel_mlp=st_channel)
 end
 
-function (fno_block::FNO_Block)(x, ps, st::NamedTuple)
+function (fno_block::FNO_Block)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     x_spectral, st_spectral = fno_block.spectral_kernel(x, ps.spectral_kernel, st.spectral_kernel)
     x_mlp, st_channel = fno_block.channel_mlp(x_spectral, ps.channel_mlp, st.channel_mlp)
     return x_mlp, (spectral_kernel=st_spectral, channel_mlp=st_channel)

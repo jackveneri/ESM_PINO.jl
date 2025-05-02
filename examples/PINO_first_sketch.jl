@@ -1,10 +1,4 @@
-using Printf, CairoMakie, JLD2, OnlineStats
-
-include("FNO_components.jl")
-include("FNO1D_components.jl")
-include("FD_schemes.jl")
-include("losses.jl")
-include("FNO.jl")
+using ESM_PINO, Printf, CairoMakie, JLD2, OnlineStats, Lux, Random, Statistics, MLUtils, Optimisers, ParameterSchedulers
 
 const gdev = gpu_device()
 const cdev = cpu_device()
@@ -22,26 +16,27 @@ function denormalize_data(data, μ, σ)
     return data .* σ .+ μ
 end
 
-# Load and prepare data
+#Load and prepare data (generated with burgers_simulation_FD_schemes.jl)
 @load "burgers_results.jld2" results ts x
 sim1_results = permutedims(results, (2, 1, 3))
 
 # Extract raw data
 const t_max = ts[end]
-t_index = 2500
+const t_min = ts[1]
+t_index = 900
 Δt = 1
 Δx = 1
-u_t1 = reshape(sim1_results[1:Δx:end, t_index, :], size(sim1_results)[1], 1, size(sim1_results)[3])
-target = reshape(sim1_results[1:Δx:end, t_index + Δt, :], size(sim1_results)[1], 1, size(sim1_results)[3])
+u_t1 = reshape(sim1_results[1:Δx:end, t_index, :], Int(size(sim1_results)[1]/Δx), 1, size(sim1_results)[3])
+target = reshape(sim1_results[1:Δx:end, t_index + Δt, :], Int(size(sim1_results)[1]/Δx), 1, size(sim1_results)[3])
 const N = size(u_t1)[1]
 const L = 1.0
 const ν = 0.001
 
 const N_t = size(sim1_results)[2]
-x_grid = L*(0:Δx:N-1) / N
+x_grid = L*(0:N-1) / N
 g = Grid(x_grid)
 M1, M2 = BurgersFD(g).M, BurgersFD(g).M2 
-M1_sparse, M2_sparse = sparse(M1), sparse(M2)
+# M1_sparse, M2_sparse = sparse(M1), sparse(M2)
 M1_gpu = gdev(M1) 
 M2_gpu = gdev(M2) 
 
@@ -49,7 +44,7 @@ M2_gpu = gdev(M2)
 x_normalized, x_μ, x_σ = normalize_data(u_t1)
 target_normalized, target_μ, target_σ = normalize_data(target)
 
-
+#also generate a test set using burgers_simulation_FD_schemes.jl
 @load "burgers_results_test.jld2" results ts x
 sim2_results = permutedims(results, (2, 1, 3))
 
@@ -75,16 +70,19 @@ fno = FourierNeuralOperator(
 #y = fno(x, ps, st)[1]
 #output shape is (spatial..., out_channels, batch)
 
+fd_params = FDPhysicsLossParameters(ν, N_t, t_max, t_min, Δt, x_σ, x_μ, M1_gpu, M2_gpu)
+spectral_params = SpectralPhysicsLossParameters(ν, L, N_t, t_max, t_min, Δt, x_σ, x_μ)
+
 # Define a dictionary to map loss functions to plot titles
 const LOSS_TITLES = Dict(
-    loss_function_just_data => "Training with Data Loss Only",
-    PINO_FD_loss_function => "Training with Physics-Informed Loss (Finite Difference)",
-    PINO_spectral_loss_function => "Training with Physics-Informed Loss (Spectral)"
+    nothing => "Training with Data Loss Only",
+    fd_params => "Training with Physics-Informed Loss (Finite Difference)",
+    spectral_params => "Training with Physics-Informed Loss (Spectral)"
 )
 
 
 function train_model(x, target; seed::Int=0,
-    maxiters::Int=3000, hidden_channels::Int=64, loss_function::Function=loss_function_just_data)
+    maxiters::Int=3000, hidden_channels::Int=32, parameters=nothing)
     
     rng = Random.default_rng(seed)
     
@@ -101,6 +99,10 @@ function train_model(x, target; seed::Int=0,
     opt = Optimisers.ADAM(0.0005f0)
     lr = i -> Exp(0.001f0, 0.999f0).(i)
     train_state = Training.TrainState(fno, ps, st, opt)
+
+    par = parameters
+    PI_loss = create_physics_loss(par)
+    loss_function = ESM_PINO.select_loss_function(PI_loss)
 
     total_loss_tracker, physics_loss_tracker, data_loss_tracker = ntuple(_ -> Lag(Float32, 32), 3)
     iter = 1
@@ -135,9 +137,9 @@ end
 
 const loss_results = Dict{String, Tuple{Vector{Float64}, Float64, Int, Int}}()
 
-for (loss_func, title) in LOSS_TITLES
+for (par, title) in LOSS_TITLES
 
-    trained_model, used_loss_function = train_model(x_normalized, target_normalized; loss_function=loss_func)
+    trained_model, used_loss_function = train_model(x_normalized, target_normalized; parameters=par)
     trained_u = Lux.testmode(StatefulLuxLayer{true}(trained_model.model, trained_model.ps, trained_model.st))
 
     #target_test_normalized, target_test_μ, target_test_σ = normalize_data(target_test)
@@ -149,14 +151,15 @@ for (loss_func, title) in LOSS_TITLES
 
     # Get the title from the dictionary
     #plot_title = get(LOSS_TITLES, used_loss_function, "Unknown Loss Function")
-
-    x_plot = x_grid
+    N_plot = size(u_pred)[1]
+    x_plot = L*(0:N_plot-1) / N_plot
 
     loss = zeros(size(target_test)[3])
     for i in range(1,size(target_test)[3])
         loss[i] = mean(abs2, u_pred[:, 1, i] - target_test[:, 1, i])
     end
 
+    
     begin
         fig = Figure(size = (800, 600))
         ax = CairoMakie.Axis(fig[1,1],xlabel="Simulation", ylabel="Loss", title="$title - Loss per Simulation")
@@ -175,7 +178,7 @@ for (loss_func, title) in LOSS_TITLES
         empty!(ax) 
         lines!(ax, x_plot, u_pred[:, 1, worst], label="Predicted", color="blue")
         lines!(ax, x_plot, target_test[:, 1, worst], label="Target", color="red")
-        lines!(ax, x_plot, x_test[:, 1, worst], label="Previous State", color="green")
+        #lines!(ax, x_plot, x_test[:, 1, worst], label="Previous State", color="green")
         axislegend(ax; )
 
 
@@ -184,11 +187,13 @@ for (loss_func, title) in LOSS_TITLES
         empty!(ax2) 
         lines!(ax2, x_plot, u_pred[:, 1, best], label="Predicted", color="blue")
         lines!(ax2, x_plot, target_test[:, 1, best], label="Target", color="red")
-        lines!(ax2, x_plot, x_test[:, 1, best], label="Previous State", color="green")
+        #lines!(ax2, x_plot, x_test[:, 1, best], label="Previous State", color="green")
         axislegend(ax2; )
     end
     display(fig1)
     display(fig2)
+    save("$(title)_worst.svg", fig1)
+    save("$(title)_best.svg", fig2)
 
     loss_results[title] = (
         copy(loss),          # Full loss vector
@@ -197,55 +202,86 @@ for (loss_func, title) in LOSS_TITLES
         best                 # Index of best case
     )
 end
-veryworst = maximum(maximum(loss_results[title][1]) for title in keys(loss_results))
-verybest = minimum(minimum(loss_results[title][1]) for title in keys(loss_results))
-ytick_range = LinRange(verybest, veryworst, 5)
-ytick_labels = [@sprintf("%.2e", y) for y in ytick_range]  
+#veryworst = maximum(maximum(loss_results[title][1]) for title in keys(loss_results))
+#verybest = minimum(minimum(loss_results[title][1]) for title in keys(loss_results))
+#ytick_range = LinRange(verybest, veryworst, 5)
+#ytick_labels = [@sprintf("%.2e", y) for y in ytick_range]  
 # Create comparative plots after all training runs
 begin
-    comparison_fig = Figure(size=(2000, 1200))
+    comparison_fig = Figure(size=(1600, 1000))  # Adjusted for vertical layout
     
-    # Loss progression plot
+    # First plot (top row)
     ax1 = CairoMakie.Axis(comparison_fig[1, 1], 
         title="Comparative Loss Across Simulations",
         xlabel="Simulation Index", 
-        ylabel="MSE Loss",
-        yticks=(ytick_range, ytick_labels))
-    # Mean loss plot
-    ax2 = CairoMakie.Axis(comparison_fig[1, 2], 
-        title="Mean Loss Comparison",
+        ylabel="MSE Loss")
+    
+    # Second plot (bottom row)
+    ax2 = CairoMakie.Axis(comparison_fig[2, 1], 
+        title="Loss Distribution Statistics",
         xticks=(1:length(loss_results), collect(keys(loss_results))),
-        ylabel="Mean MSE",
-        yticks=(ytick_range, ytick_labels))
-    # Best/Worst case plot
-    ax3 = CairoMakie.Axis(comparison_fig[2, 1:2], 
-        title="Best/Worst Case Performance",
-        xlabel="Loss Function Type", 
+        xlabel="Training Type",
         ylabel="MSE Loss",
-        xticks=(1:length(loss_results), collect(keys(loss_results))),
-        yticks=(ytick_range, ytick_labels))
-    # Plotting code
-    colors = [:blue, :red, :green]  # Add more colors if needed
-    for (idx, (title, (loss, mean_loss, worst_idx, best_idx))) in enumerate(loss_results)
-        # Loss progression
-        lines!(ax1, 1:length(loss), loss, label=title, color=colors[idx])
-        
-        # Mean loss
-        barplot!(ax2, [idx], [mean_loss], color=colors[idx], label=title)
-        
-        # Best/worst cases
-        scatter!(ax3, [idx], [loss[best_idx]], color=colors[idx], marker=:circle, label="Best ($title)")
-        scatter!(ax3, [idx], [loss[worst_idx]], color=colors[idx], marker=:xcross, label="Worst ($title)")
+        yscale=log10)
+
+    # Prepare data (same as before)
+    categories = Int[]
+    vals = Float64[]
+    color_indices = Int[]  
+    colors = [:blue, :red, :green]
+    
+    for (idx, (title, (loss, mean_loss, _, _))) in enumerate(loss_results)
+        append!(categories, fill(idx, length(loss)))
+        append!(vals, loss)
+        append!(color_indices, fill(idx, length(loss)))
+        lines!(ax1, 1:length(loss), loss, color=colors[idx], label=title)
     end
 
-    axislegend(ax1, position=:rt)
-    axislegend(ax2, position=:rb)
-    #axislegend(ax3, position=:rt)
-    
-    rowsize!(comparison_fig.layout, 1, Aspect(1, 0.6))
-    rowsize!(comparison_fig.layout, 2, Aspect(1, 0.4))
-    
+    # Boxplot (same as before)
+    boxplot!(ax2, categories, vals,
+        color=color_indices, colormap=colors,
+        show_notch=false, whiskerwidth=0.4,
+        strokecolor=:black, strokewidth=1,
+        mediancolor=:white
+    )
+
+    # Add mean indicators
+    for (idx, (title, (loss, mean_loss, _, _))) in enumerate(loss_results)
+        scatter!(ax2, [idx], [mean(loss)], 
+            marker='◇', color=:white, strokecolor=:black, markersize=12)
+    end
+
+    # Add legend to first plot
+    axislegend(ax1;
+        position=:rt,
+        title="Training Types",
+        framecolor=:transparent,
+        padding=(10, 10, 10, 10)
+    )
+
+    # Create dummy elements for boxplot legend
+    median_line = lines!(ax2, [0,0], [0,0], color=:white, visible=false)[1]
+    mean_marker = scatter!(ax2, [0], [0], marker='◇', color=:white, strokecolor=:black, visible=false)
+
+    # Add statistics legend to second plot
+    #=
+    axislegend(
+        ax2,
+        [median_line, mean_marker],
+        ["Median Value", "Mean Value"];
+        title="Statistics",
+        titleposition=:left,
+        orientation=:horizontal,
+        framevisible=false,
+        position=:rt
+    )
+    =#
+
+    # Adjust row proportions and spacing
+    rowsize!(comparison_fig.layout, 1, Relative(0.4))  # Top plot height
+    rowsize!(comparison_fig.layout, 2, Relative(0.6))  # Bottom plot height
+    rowgap!(comparison_fig.layout, 15)  # Space between rows
+
     display(comparison_fig)
 end
-
-save("comparison_fig.svg", comparison_fig)
+#save("comparison_fig.svg", comparison_fig)

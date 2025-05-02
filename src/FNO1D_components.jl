@@ -1,62 +1,3 @@
-using Lux, LuxCUDA, Random, Optimisers, Zygote, Statistics, MLUtils, ParameterSchedulers, FFTW, NNlib, ChainRulesCore
-using ComponentArrays
-
-include("NewRepeatedLayer.jl")
-
-"""
-    SpectralConv{T,N}
-
-Spectral convolution layer for Fourier Neural Operator in Lux.jl.
-Expects input in (spatial..., channel, batch) format.
-"""
-struct SpectralConv{T,N} <: Lux.AbstractLuxLayer
-    in_channels::Int
-    out_channels::Int
-    modes::NTuple{N,Int}
-end
-
-function SpectralConv(in_channels::Integer, out_channels::Integer, modes::NTuple{N,Integer}) where N
-    return SpectralConv{ComplexF32, N}(in_channels, out_channels, modes)
-end
-
-function Lux.initialparameters(rng::AbstractRNG, layer::SpectralConv)
-    in_ch, out_ch, modes = layer.in_channels, layer.out_channels, layer.modes
-    init_std = sqrt(2f0 / (in_ch + out_ch))  # Standard Glorot-like scaling
-    weight = init_std * randn(rng, ComplexF32, modes..., out_ch, in_ch)
-    return (weight=weight,)
-end
-
-function Lux.initialstates(rng::AbstractRNG, layer::SpectralConv)
-    return NamedTuple()  # No internal state needed
-end
-
-function low_pass(x_ft, modes)
-    return view(x_ft, map(d -> 1:d, modes)..., :, :)
-end
-
-function apply_pattern(x_tr::AbstractArray{T,N}, weights::AbstractArray{T}) where {T,N}
-    x_expanded = reshape(x_tr, size(x_tr)[1:N-2]..., 1, size(x_tr)[N-1:N]...)
-    return dropdims(sum(weights .* x_expanded, dims=N), dims=N)
-end
-
-function expand_pad_dims(pad_dims::Dims{N}) where {N}
-    return ntuple(i -> isodd(i) ? 0 : pad_dims[i ÷ 2], 2N)
-end
-@non_differentiable expand_pad_dims(::Any)
-
-function (layer::SpectralConv)(x, ps, st::NamedTuple)
-    x_ft = fft(x, 1:ndims(x)-2)  # Apply Fourier transform on spatial dimensions
-    x_tr = low_pass(x_ft, layer.modes)  # Truncate high frequencies
-    x_p = apply_pattern(x_tr, ps.weight)  # Apply learned spectral filters
-    
-    # Pad back to original shape
-    pad_dims = size(x_ft)[1:(end - 2)] .- size(x_p)[1:(end - 2)]
-    x_padded = NNlib.pad_constant(x_p, expand_pad_dims(pad_dims), false; dims=ntuple(identity, ndims(x_p) - 2))
-    
-    # Inverse Fourier transform to return to spatial domain
-    return real(ifft(x_padded, 1:ndims(x_padded)-2)), st
-end
-
 """
     SpectralKernel1D{P,F}
     Combines a SpectralConv layer with a 1x1 convolution in parallel, followed by an activation function.
@@ -68,7 +9,7 @@ struct SpectralKernel1D{P,F} <: Lux.AbstractLuxLayer
     activation::F    # Activation function
 end
 
-function SpectralKernel1D(ch::Pair{<:Integer,<:Integer}, modes::NTuple{N,Integer}, activation=NNlib.gelu) where N
+function SpectralKernel1D(ch::Pair{<:Integer,<:Integer}, modes::NTuple{1,Integer}, activation=NNlib.gelu) 
     in_ch, out_ch = ch
     conv = Conv((1,), in_ch => out_ch, pad=0)
     spectral = SpectralConv(in_ch, out_ch, modes)
@@ -219,3 +160,4 @@ function (fno_block::FNO_Block1D)(x, ps, st::NamedTuple)
     x, st_channel = fno_block.channel_mlp(x, ps.channel_mlp, st.channel_mlp)
     return x, (spectral_kernel=st_spectral, channel_mlp=st_channel)
 end
+
