@@ -27,6 +27,7 @@ end
 
 function SFNO(pars::QG3ModelParameters;
     batch_size::Int=1,
+    modes::Int=pars.L,
     in_channels::Int,
     out_channels::Int,
     hidden_channels::Int=32,
@@ -55,7 +56,7 @@ function SFNO(pars::QG3ModelParameters;
             Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity),
         )
         
-        sfno_blocks = NewRepeatedLayer(SFNO_Block(hidden_channels, pars; batch_size=batch_size, expansion_factor=channel_mlp_expansion, activation=activation), n_layers)
+        sfno_blocks = NewRepeatedLayer(SFNO_Block(hidden_channels, pars; modes=modes, batch_size=batch_size, expansion_factor=channel_mlp_expansion, activation=activation), n_layers)
     
     else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'no_grid'."))
@@ -66,6 +67,7 @@ end
 function SFNO(pars::QG3ModelParameters,
     ggsh::QG3.GaussianGridtoSHTransform,
     shgg::QG3.SHtoGaussianGridTransform;
+    modes::Int=pars.L,
     in_channels::Int,
     out_channels::Int,
     hidden_channels::Int=32,
@@ -94,7 +96,7 @@ function SFNO(pars::QG3ModelParameters,
             Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity),
         )
         
-        sfno_blocks = NewRepeatedLayer(SFNO_Block(hidden_channels, pars, ggsh, shgg; expansion_factor=channel_mlp_expansion, activation=activation), n_layers)
+        sfno_blocks = NewRepeatedLayer(SFNO_Block(hidden_channels, pars, ggsh, shgg; modes=modes, expansion_factor=channel_mlp_expansion, activation=activation), n_layers)
     
     else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'no_grid'."))
@@ -142,56 +144,14 @@ function (layer::SFNO)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     return x, (embedding=st_embedding, lifting=st_lifting, sfno_blocks=st_sfno_blocks, projection=st_projection)
 end
 #=
-using NetCDF, CFTime, Dates
-
-T = Float32
-
-begin
-        DIR = "data/"
-        NAME = "ERA5-sf-t21q.nc"
-        LSNAME = "land-t21.nc"
-        ORONAME = "oro-t21.nc"
-
-        LATNAME = "lat"
-        LONNAME = "lon"
-
-        lats = deg2rad.(T.(ncread(string(DIR,NAME),LATNAME)))
-        lat_inds = 1:size(lats,1)
-
-        ψ = ncread(string(DIR,NAME),"atmosphere_horizontal_streamfunction")[:,:,:,:]
-
-        lvl = ncread(string(DIR,NAME),"level")
-        lats = deg2rad.(T.(ncread(string(DIR,NAME),LATNAME)))[lat_inds]
-        lons = deg2rad.(T.(ncread(string(DIR,NAME),LONNAME)))
-
-        times = CFTime.timedecode( ncread(string(DIR,NAME),"time"),ncgetatt(string(DIR,NAME),"time","units"))
-
-        summer_ind = [month(t) ∈ [6,7,8] for t ∈ times]
-        winter_ind = [month(t) ∈ [12,1,2] for t ∈ times]
-
-        LS = T.(permutedims(ncread(string(DIR,LSNAME),"var172")[:,:,1],[2,1]))[lat_inds,:]
-        # Land see mask, on the same grid as lats and lons
-
-        h = (T.(permutedims(ncread(string(DIR,ORONAME),"z")[:,:,1],[2,1]))[lat_inds,:] .* T.(ncgetatt(string(DIR,ORONAME), "z", "scale_factor"))) .+ T.(ncgetatt(string(DIR,ORONAME),"z","add_offset"))
-        # orography, array on the same grid as lats and lons
-
-        LEVELS = [200, 500, 800]
-
-        ψ = togpu(ψ[:,:,level_index(LEVELS,lvl),:])
-        ψ = permutedims(ψ, [3,2,1,4]) # level, lat, lon,
-        ψ = T.(ψ[:,lat_inds,:,:])
-
-        gridtype="gaussian"
-end
-
-
-L = 22 # T21 grid, truncate with l_max = 21
-
-# pre-compute the model and normalize the data
-qg3ppars = QG3ModelParameters(L, lats, lons, LS, h)
+using JLD2
+@load string(@__DIR__, "/data/t21-precomputed-p.jld2") qg3ppars
+#pre-compute the model 
+qg3ppars = qg3ppars
 x = rand(Float32, 32, 64, 3, 10)
 model = SFNO(qg3ppars,
     batch_size=size(x, 4),
+    modes = 30,
     in_channels=3,
     out_channels=3,
     hidden_channels=32,
@@ -203,6 +163,7 @@ model = SFNO(qg3ppars,
     positional_embedding="no_grid",
 )
 model = SFNO(qg3ppars, QG3.GaussianGridtoSHTransform(qg3ppars, 32, N_batch=size(x, 4)), QG3.SHtoGaussianGridTransform(qg3ppars, 32, N_batch=size(x, 4)),
+    modes = 15,
     in_channels=3,
     out_channels=3,
     hidden_channels=32,
@@ -221,4 +182,22 @@ model(x, ps, st)[1]
 
 using Zygote
 grad = Zygote.gradient(ps -> sum(model(x, ps, st)[1]), ps)
+
+@load string(@__DIR__, "/data/t42-precomputed-p.jld2") qg3ppars
+qg3ppars = qg3ppars
+model = SFNO(qg3ppars,
+    batch_size=size(x, 4),
+    modes = model.sfno_blocks.layer.spherical_kernel.spherical_conv.modes,
+    in_channels=3,
+    out_channels=3,
+    hidden_channels=32,
+    n_layers=4,
+    lifting_channel_ratio=2,
+    projection_channel_ratio=2,
+    channel_mlp_expansion=0.5,
+    activation=NNlib.gelu,
+    positional_embedding="no_grid",
+)
+x = rand(Float32, 64, 128, 3, 10) |> gdev
+model(x, ps, st)
 =#
