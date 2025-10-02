@@ -1,7 +1,7 @@
 module ESM_PINOQG3Ext
 
 using ESM_PINO
-using QG3
+using QG3, Lux, LuxCUDA, Random, Optimisers, Zygote, NNlib, ChainRulesCore
  
 include("SphericalConvTypeSpec.jl")
 include("SFNO_components.jl")
