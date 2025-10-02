@@ -14,10 +14,10 @@ function SpectralConv(in_channels::Integer, out_channels::Integer, modes::NTuple
     return SpectralConv{ComplexF32, N}(in_channels, out_channels, modes)
 end
 
-function Lux.initialparameters(rng::AbstractRNG, layer::SpectralConv)
+function Lux.initialparameters(rng::AbstractRNG, layer::SpectralConv{T,N}) where {T,N}
     in_ch, out_ch, modes = layer.in_channels, layer.out_channels, layer.modes
     init_std = sqrt(2f0 / (in_ch + out_ch))  # Standard Glorot-like scaling
-    weight = init_std * randn(rng, ComplexF32, modes..., out_ch, in_ch)
+    weight = init_std * randn(rng, T, modes..., out_ch, in_ch)
     return (weight=weight,)
 end
 
@@ -80,7 +80,7 @@ function expand_pad_dims(pad_dims::Dims{N}) where {N}
 end
 @non_differentiable expand_pad_dims(::Any)
 
-function (layer::SpectralConv)(x, ps, st::NamedTuple)
+function (layer::SpectralConv)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     x_ft = fft(x, 1:ndims(x)-2)  # Apply Fourier transform on spatial dimensions
     x_tr = low_pass(x_ft, layer.modes)  # Truncate high frequencies
     x_p = apply_pattern(x_tr, ps.weight)  # Apply learned spectral filters
@@ -105,9 +105,15 @@ struct SpectralKernel{P,F} <: Lux.AbstractLuxLayer
     activation::F    # Activation function
 end
 
+function SpectralKernel(in_ch::Integer, out_ch::Integer , modes::NTuple{2,Integer}, activation=NNlib.gelu) 
+    conv = Conv((1,1), in_ch => out_ch, pad=0, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32)
+    spectral = SpectralConv(in_ch, out_ch, modes)
+    return SpectralKernel(conv, spectral, activation)
+end
+
 function SpectralKernel(ch::Pair{<:Integer,<:Integer}, modes::NTuple{2,Integer}, activation=NNlib.gelu) 
     in_ch, out_ch = ch
-    conv = Conv((1,1), in_ch => out_ch, pad=0)
+    conv = Conv((1,1), in_ch => out_ch, pad=0, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32)
     spectral = SpectralConv(in_ch, out_ch, modes)
     return SpectralKernel(conv, spectral, activation)
 end
@@ -154,23 +160,24 @@ function (layer::SoftGating)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
 end
 
 """
-    ChannelMLP(channels::Int; expansion_factor=0.5, activation=gelu)
+    ChannelMLP(channels::Int; expansion_factor=2.0, activation=gelu)
 
 Implements a channel-wise MLP with a skip connection.
 """
 struct ChannelMLP{M,S} <: Lux.AbstractLuxLayer
     mlp::M
     skip::S
+    expansion_factor::Number
 end
 
-function ChannelMLP(channels::Int; expansion_factor=0.5, activation=NNlib.gelu)
+function ChannelMLP(channels::Int; expansion_factor=2.0, activation=NNlib.gelu)
     hidden_ch = Int(expansion_factor * channels)
     mlp = Chain(
-        Conv((1, 1), channels => hidden_ch, activation),
-        Conv((1, 1), hidden_ch => channels)
+        Conv((1, 1), channels => hidden_ch, activation, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+        Conv((1, 1), hidden_ch => channels, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32)
     )
     skip = SoftGating(channels)
-    return ChannelMLP(mlp, skip)
+    return ChannelMLP(mlp, skip, expansion_factor)
 end
 
 function Lux.initialparameters(rng::AbstractRNG, layer::ChannelMLP)
@@ -248,7 +255,7 @@ struct FNO_Block <: Lux.AbstractLuxLayer
     modes :: NTuple{2, Int}
 end
 
-function FNO_Block(channels::Int, modes::NTuple{2,Int}; expansion_factor=0.5, activation=NNlib.gelu)
+function FNO_Block(channels::Int, modes::NTuple{2,Int}; expansion_factor=2, activation=NNlib.gelu)
     spectral_kernel = SpectralKernel(channels => channels, modes, activation)
     channel_mlp = ChannelMLP(channels, expansion_factor=expansion_factor, activation=activation)
     return FNO_Block(spectral_kernel, channel_mlp, channels, modes)

@@ -10,22 +10,15 @@ struct SphericalKernel{P,F} <: Lux.AbstractLuxLayer
     activation::F    # Activation function
 end
 
-function SphericalKernel(hidden_channels::Int, ch::Pair{<:Integer,<:Integer}, pars::QG3ModelParameters, activation=NNlib.gelu; modes::Int=pars.L, batch_size::Int=1) 
-    in_ch, out_ch = ch
-    conv = Conv((1,1), in_ch => out_ch, pad=0)
-    spherical = SphericalConv(pars, hidden_channels; modes=modes, batch_size=batch_size)
+function SphericalKernel(hidden_channels::Int, pars::QG3ModelParameters, activation=NNlib.gelu; modes::Int=pars.L, batch_size::Int=1, gpu::Bool=true, zsk::Bool=false) 
+    conv = Conv((1,1), hidden_channels => hidden_channels, pad=0, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32)
+    spherical = SphericalConv(pars, hidden_channels; modes=modes, batch_size=batch_size, gpu=gpu, zsk=zsk)
     return SphericalKernel(conv, spherical, activation)
 end
 
-function SphericalKernel(hidden_channels::Int, ch::Pair{<:Integer,<:Integer}, pars::QG3.QG3ModelParameters, ggsh::QG3.GaussianGridtoSHTransform, shgg::QG3.SHtoGaussianGridTransform, activation=NNlib.gelu; modes::Int=pars.L)
-    in_ch, out_ch = ch
-    conv = Conv((1,1), in_ch => out_ch, pad=0)
-    if ggsh.FT_4d.plan.input_size[1] == hidden_channels
-        spherical = SphericalConv(pars, hidden_channels, modes, ggsh, shgg)
-    else
-        println("Warning: SphericalConv hidden channels do not match the input channels of the GaussianGridtoSHTransform. Falling back to safe constructor")
-        spherical = SphericalConv(pars, hidden_channels; batch_size=ggsh.FT_4d.plan.input_size[4], modes=modes)
-    end
+function SphericalKernel(hidden_channels::Int, ggsh::QG3.GaussianGridtoSHTransform, shgg::QG3.SHtoGaussianGridTransform, activation=NNlib.gelu; modes::Int=ggsh.output_size[1], zsk::Bool=false)
+    conv = Conv((1,1), hidden_channels => hidden_channels, pad=0, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32)
+    spherical = SphericalConv(hidden_channels, ggsh, shgg, modes, zsk=zsk)
     return SphericalKernel(conv, spherical, activation)
 end
 
@@ -48,8 +41,10 @@ function (layer::SphericalKernel)(x::AbstractArray, ps::NamedTuple, st::NamedTup
     return x_out, (spatial=st_spatial, spherical=st_spherical)
 end
 #=
-using JLD2
-@load string(@__DIR__, "/data/t21-precomputed-p.jld2") qg3ppars
+using JLD2, Lux, Random, QG3, NNlib, LuxCUDA, ChainRulesCore
+include("SphericalConvTypeSpec.jl")
+include("FNO_components.jl")
+@load string(dirname(@__DIR__), "/data/t21-precomputed-p.jld2") qg3ppars
 
 
 #pre-compute the model 
@@ -57,21 +52,22 @@ qg3ppars = qg3ppars
 ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, 32, N_batch=1)
 shgg = QG3.SHtoGaussianGridTransform(qg3ppars, 32, N_batch=1)
 x = rand(Float32, 32, 64, 32, 1)
-model = SphericalKernel(32, 32 => 32, qg3ppars, batch_size=size(x,4), modes=30)
+model = SphericalKernel(32, qg3ppars, batch_size=size(x,4), modes=30)
+model = SphericalKernel(32, ggsh, shgg, modes=30)
 gdev = gpu_device()
 rnd = Random.default_rng(0)
-ps, st = Lux.setup(rnd, model) |> gdev
+ps, st = Lux.setup(rnd, model) |> gdev 
 x = x |> gdev
 model(x, ps, st)
 
 using Zygote
 gr = Zygote.gradient(ps -> sum(model(x, ps, st)[1]), ps)
 
-@load string(@__DIR__, "/data/t42-precomputed-p.jld2") qg3ppars
+@load string(dirname(@__DIR__), "/data/t42-precomputed-p.jld2") qg3ppars
 qg3ppars = qg3ppars
 ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, 32, N_batch=1)
 shgg = QG3.SHtoGaussianGridTransform(qg3ppars, 32, N_batch=1)
-model = SphericalKernel(32, 32 => 32, qg3ppars, batch_size=size(x,4), modes=model.spherical_conv.modes)
+model = SphericalKernel(32, qg3ppars, batch_size=size(x,4), modes=model.spherical_conv.modes)
 x = rand(Float32, 64, 128, 32, 1) |> gdev
 model(x, ps, st)
 =#
@@ -83,20 +79,20 @@ A block that combines a spectral kernel with a channel MLP.
 struct SFNO_Block <: Lux.AbstractLuxLayer
     spherical_kernel :: SphericalKernel
     channel_mlp :: ChannelMLP
-    pars :: QG3ModelParameters
     channels :: Int
+    skip :: Bool
 end
 
-function SFNO_Block(channels::Int, pars::QG3ModelParameters; modes::Int=pars.L, batch_size::Int=1, expansion_factor=0.5, activation=NNlib.gelu)
-    spherical_kernel = SphericalKernel(channels, channels => channels, pars, activation;modes=modes, batch_size=batch_size)
+function SFNO_Block(channels::Int, pars::QG3ModelParameters; modes::Int=pars.L, batch_size::Int=1, expansion_factor::Real=2.0, activation=NNlib.gelu, skip::Bool=true, gpu::Bool=true, zsk::Bool=false)
+    spherical_kernel = SphericalKernel(channels, pars, activation; modes=modes, batch_size=batch_size, gpu=gpu, zsk=zsk)
     channel_mlp = ChannelMLP(channels, expansion_factor=expansion_factor, activation=activation)
-    return SFNO_Block(spherical_kernel, channel_mlp, pars, channels)
+    return SFNO_Block(spherical_kernel, channel_mlp, channels, skip)
 end
 
-function SFNO_Block(channels::Int, pars::QG3.QG3ModelParameters, ggsh::QG3.GaussianGridtoSHTransform, shgg::QG3.SHtoGaussianGridTransform; modes::Int=pars.L, expansion_factor=0.5, activation=NNlib.gelu)
-    spherical_kernel = SphericalKernel(channels, channels => channels, pars, ggsh, shgg, activation; modes=modes)
+function SFNO_Block(channels::Int, ggsh::QG3.GaussianGridtoSHTransform, shgg::QG3.SHtoGaussianGridTransform; modes::Int = ggsh.output_size[1], expansion_factor::Real=2.0, activation=NNlib.gelu, skip::Bool=true, zsk::Bool=false)
+    spherical_kernel = SphericalKernel(channels, ggsh, shgg, activation; modes=modes, zsk=zsk)
     channel_mlp = ChannelMLP(channels, expansion_factor=expansion_factor, activation=activation)
-    return SFNO_Block(spherical_kernel, channel_mlp, pars, channels)
+    return SFNO_Block(spherical_kernel, channel_mlp, channels, skip)
 end
 
 function Lux.initialparameters(rng::AbstractRNG, block::SFNO_Block)
@@ -114,19 +110,26 @@ end
 function (sfno_block::SFNO_Block)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     x_spherical, st_spherical = sfno_block.spherical_kernel(x, ps.spherical_kernel, st.spherical_kernel)
     x_mlp, st_channel = sfno_block.channel_mlp(x_spherical, ps.channel_mlp, st.channel_mlp)
-    return x_mlp, (spherical_kernel=st_spherical, channel_mlp=st_channel)
+    if sfno_block.skip
+        x_out = x + x_mlp
+    else
+        x_out = x_mlp
+    end
+    return x_out, (spherical_kernel=st_spherical, channel_mlp=st_channel)
 end
 #=
 using JLD2
-@load string(@__DIR__, "/data/t21-precomputed-p.jld2") qg3ppars
+@load string(dirname(@__DIR__), "/data/t21-precomputed-p.jld2") qg3ppars
 
 
 #pre-compute the model 
+
 qg3ppars = qg3ppars
 ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, 32, N_batch=1)
 shgg = QG3.SHtoGaussianGridTransform(qg3ppars, 32, N_batch=1)
 x = rand(Float32, 32, 64, 32, 1)
 model = SFNO_Block(32, qg3ppars, batch_size=size(x,4), modes=30)
+model = SFNO_Block(32, ggsh, shgg, modes=30)
 gdev = gpu_device()
 rnd = Random.default_rng(0)
 ps, st = Lux.setup(rnd, model) |> gdev
@@ -136,7 +139,7 @@ model(x, ps, st)
 using Zygote
 gr = Zygote.gradient(ps -> sum(model(x, ps, st)[1]), ps)
 
-@load string(@__DIR__, "/data/t42-precomputed-p.jld2") qg3ppars
+@load string(dirname(@__DIR__), "/data/t42-precomputed-p.jld2") qg3ppars
 qg3ppars = qg3ppars
 ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, 32, N_batch=1)
 shgg = QG3.SHtoGaussianGridTransform(qg3ppars, 32, N_batch=1)

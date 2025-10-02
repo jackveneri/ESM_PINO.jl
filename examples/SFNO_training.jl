@@ -2,7 +2,7 @@ root = dirname(@__DIR__)
 using Pkg
 Pkg.activate(root)
 Pkg.instantiate()
-using ESM_PINO, Printf, CUDA, OnlineStats, Lux, Random, Statistics, MLUtils, Optimisers, ParameterSchedulers, QG3, NetCDF, Dates, CFTime, JLD2
+using ESM_PINO, Printf, CUDA, OnlineStats, Lux,LuxCUDA, Random, Statistics, MLUtils, Optimisers, ParameterSchedulers, QG3, NetCDF, Dates, CFTime, JLD2
 
 const gdev = gpu_device()
 const cdev = cpu_device()
@@ -11,7 +11,7 @@ function train_model(x::AbstractArray, target::AbstractArray, pars::QG3ModelPara
     maxiters::Int=3000, hidden_channels::Int=32, parameters::Union{Nothing, ESM_PINO.QG3_Physics_Parameters}=nothing)
     
     rng = Random.default_rng(seed)
-    batchsize = 200
+    batchsize = 100
     dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> gdev
     ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=batchsize)
     shgg = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=batchsize)
@@ -24,7 +24,7 @@ function train_model(x::AbstractArray, target::AbstractArray, pars::QG3ModelPara
         out_channels=3, 
         n_layers=4,
         hidden_channels=hidden_channels, 
-        positional_embedding="grid"
+        positional_embedding="no_grid"
     )
 
     ps, st = Lux.setup(rng, sfno) |> gdev
@@ -85,16 +85,17 @@ function train_model(x::AbstractArray, target::AbstractArray, pars::QG3ModelPara
 end
 
 
-@load string(root, "/data/t21-precomputed-p.jld2") qg3ppars
+@load string(root, "/data/t42-precomputed-p.jld2") qg3ppars
 qg3ppars = qg3ppars
 qg3p = CUDA.@allowscalar QG3Model(qg3ppars)
-@load string(root, "/data/t21-precomputed-S.jld2") S
-S = CuArray(S)
+@load string(root, "/data/t42-precomputed-S.jld2") S
+S = CUDA.@allowscalar QG3.reorder_SH_gpu(S, qg3ppars)
 
+# initial conditions for streamfunction and vorticity
 N_sims = 1000
-@load string(root,"/data/solq.jld2") solu
-solu = CuArray(cat(solu...,dims=4))
-solu = permutedims(QG3.transform_grid_data(solu, qg3p),(2,3,1,4))
+@load string(root,"/data/t42_qg3_data_SH_CPU.jld2") q
+q = QG3.reorder_SH_gpu(q, qg3ppars)
+solu = permutedims(QG3.transform_grid_data(q, qg3p),(2,3,1,4))
 solu,  μ, σ = ESM_PINO.normalize_data(solu)
 q_0 = solu[:,:,:,1:N_sims]
 q_0 = CuArray(ESM_PINO.add_noise(Array(q_0)))
@@ -105,7 +106,7 @@ ggsh2 = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=N_sims)
 
 dt = 1 #G3.p.time_unit
 seed = 0
-maxiters = 1000
+maxiters = 5000
 hidden_channels = 64
 rng = Random.default_rng(seed)
 ggsh_train = QG3.GaussianGridtoSHTransform(qg3ppars, hidden_channels, N_batch=N_sims)
@@ -120,7 +121,7 @@ sfno = SFNO(
         out_channels=3, 
         n_layers=4, 
         hidden_channels=hidden_channels, 
-        positional_embedding="grid"
+        positional_embedding="no_grid"
 )
 
 
@@ -150,7 +151,7 @@ test_model = SFNO(
         out_channels=3, 
         n_layers=4, 
         hidden_channels=hidden_channels, 
-        positional_embedding="grid"
+        positional_embedding="no_grid"
     )
 
 trained_u = Lux.testmode(StatefulLuxLayer{true}(test_model, trained_model.ps, trained_model.st))

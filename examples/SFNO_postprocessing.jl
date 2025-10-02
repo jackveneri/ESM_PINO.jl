@@ -21,13 +21,13 @@ solu = permutedims(solu,(2,3,1,4))
 solu,  μ, σ = ESM_PINO.normalize_data(solu)
 
 @load string(root,"/models/",model_string,"_results.jld2")  sf_plot_pred sf_plot_evolved mistake loss ps st
-@load string(root, "/data/plotting_utils.jld2")
+@load string(root, "/data/plotting_utils.jld2") clims time_scale
 @load string(root,"/data/t21_qg3_data_SH_CPU.jld2") t q
 q = QG3.reorder_SH_gpu(q, qg3p.p)
 solu = permutedims(QG3.transform_grid_data(q, qg3p),(2,3,1,4))
 
 N_test = 100
-hidden_channels = 64
+hidden_channels = 128
 shgg2 = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=N_test)
 ggsh2 = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=N_test)
 test_model = SFNO(
@@ -165,10 +165,10 @@ for ilvl in 1:3
     end
 end
 
-long_rollout_iter = Int(round(10 / time_scale))
+long_rollout_iter = Int(round(20 / time_scale))
 snapshots = 100
 time_scale_adjust = Int(round(long_rollout_iter / (snapshots-1)))
-q_stable = apply_n_times(trained_u_autoreg, q_test_rollout, long_rollout_iter; m=100)
+q_stable = apply_n_times(trained_u_autoreg, q_test_rollout, long_rollout_iter; m=snapshots)
 q_stable = cat(q_stable..., dims=4)
 q_pred_sh = QG3.transform_SH(permutedims(q_stable,(3,1,2,4)), ggsh2)
 sf_plot_pred = transform_grid(qprimetoψ(qg3p, q_pred_sh), shgg2)

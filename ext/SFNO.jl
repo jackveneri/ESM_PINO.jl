@@ -21,8 +21,11 @@ A layer that combines the Spherical Fourier Neural Operator (SFNO) with position
 struct SFNO <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :sfno_blocks, :projection)}
     embedding ::Union{NoOpLayer, GridEmbedding2D}
     lifting ::Lux.AbstractLuxLayer
-    sfno_blocks ::NewRepeatedLayer{SFNO_Block}
+    sfno_blocks ::Lux.AbstractLuxLayer
     projection ::Lux.AbstractLuxLayer
+    outer_skip :: Bool
+    lifting_channel_ratio::Int
+    projection_channel_ratio::Int
 end
 
 function SFNO(pars::QG3ModelParameters;
@@ -34,9 +37,13 @@ function SFNO(pars::QG3ModelParameters;
     n_layers::Int=4,
     lifting_channel_ratio::Int=2,
     projection_channel_ratio::Int=2,
-    channel_mlp_expansion::Number=0.5,
+    channel_mlp_expansion::Number=2.0,
     activation=NNlib.gelu,
-    positional_embedding::AbstractString="grid"
+    positional_embedding::AbstractString="grid",
+    inner_skip::Bool=true,
+    outer_skip::Bool=true,
+    gpu=true,
+    zsk=false
 ) 
     embedding = nothing
     if positional_embedding in ["grid","no_grid"]
@@ -47,36 +54,39 @@ function SFNO(pars::QG3ModelParameters;
             embedding = NoOpLayer()
         end
         lifting = Chain(
-            Conv((1, 1), in_channels => Int(lifting_channel_ratio * hidden_channels), activation),
-            Conv((1, 1), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, activation),
+            Conv((1, 1), in_channels => Int(lifting_channel_ratio * hidden_channels), activation, cross_correlation=true, init_weight=kaiming_normal; init_bias=zeros32),
+            Conv((1, 1), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
         )
         
         projection = Chain(
-            Conv((1, 1), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation),
-            Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity),
+            Conv((1, 1), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation,cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+            Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
         )
         
-        sfno_blocks = NewRepeatedLayer(SFNO_Block(hidden_channels, pars; modes=modes, batch_size=batch_size, expansion_factor=channel_mlp_expansion, activation=activation), n_layers)
+        sfno_blocks = Lux.RepeatedLayer(SFNO_Block(hidden_channels, pars; modes=modes, batch_size=batch_size, expansion_factor=channel_mlp_expansion, activation=activation, skip=inner_skip, gpu=gpu, zsk=zsk), repeats=Val(n_layers))
     
     else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'no_grid'."))
     end
-    return SFNO(embedding, lifting, sfno_blocks, projection)
+    return SFNO(embedding, lifting, sfno_blocks, projection, outer_skip, lifting_channel_ratio, projection_channel_ratio)
 end
 
-function SFNO(pars::QG3ModelParameters,
+function SFNO(
     ggsh::QG3.GaussianGridtoSHTransform,
     shgg::QG3.SHtoGaussianGridTransform;
-    modes::Int=pars.L,
+    modes::Int=ggsh.output_size[1],
     in_channels::Int,
     out_channels::Int,
     hidden_channels::Int=32,
     n_layers::Int=4,
     lifting_channel_ratio::Int=2,
     projection_channel_ratio::Int=2,
-    channel_mlp_expansion::Number=0.5,
+    channel_mlp_expansion::Number=2.0,
     activation=NNlib.gelu,
-    positional_embedding::AbstractString="grid"
+    positional_embedding::AbstractString="grid",
+    inner_skip::Bool=true,
+    outer_skip::Bool=true,
+    zsk=false
 )
    embedding = nothing
     if positional_embedding in ["grid","no_grid"]
@@ -86,22 +96,22 @@ function SFNO(pars::QG3ModelParameters,
         else
             embedding = NoOpLayer()
         end
-        lifting = Chain(
-            Conv((1, 1), in_channels => Int(lifting_channel_ratio * hidden_channels), activation),
-            Conv((1, 1), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, activation),
+         lifting = Chain(
+            Conv((1, 1), in_channels => Int(lifting_channel_ratio * hidden_channels), activation, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+            Conv((1, 1), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
         )
         
         projection = Chain(
-            Conv((1, 1), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation),
-            Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity),
+            Conv((1, 1), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+            Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
         )
         
-        sfno_blocks = NewRepeatedLayer(SFNO_Block(hidden_channels, pars, ggsh, shgg; modes=modes, expansion_factor=channel_mlp_expansion, activation=activation), n_layers)
+        sfno_blocks = Lux.RepeatedLayer(SFNO_Block(hidden_channels, ggsh, shgg; modes=modes, expansion_factor=channel_mlp_expansion, activation=activation, skip=inner_skip, zsk=zsk), repeats=Val(n_layers))
     
     else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'no_grid'."))
     end
-    return SFNO(embedding, lifting, sfno_blocks, projection) 
+    return SFNO(embedding, lifting, sfno_blocks, projection, outer_skip, lifting_channel_ratio, projection_channel_ratio) 
 end
 
 function Lux.initialparameters(rng::AbstractRNG, layer::SFNO)
@@ -138,14 +148,20 @@ function (layer::SFNO)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     end
     
     x, st_lifting = layer.lifting(x, ps.lifting, st.lifting)
+    residual = x
     x, st_sfno_blocks = layer.sfno_blocks(x, ps.sfno_blocks, st.sfno_blocks)
-    x, st_projection = layer.projection(x, ps.projection, st.projection)
-
+    if layer.outer_skip
+        x_out = x + residual
+    else
+        x_out = x
+    end
+    x, st_projection = layer.projection(x_out, ps.projection, st.projection)
+    
     return x, (embedding=st_embedding, lifting=st_lifting, sfno_blocks=st_sfno_blocks, projection=st_projection)
 end
 #=
-using JLD2
-@load string(@__DIR__, "/data/t21-precomputed-p.jld2") qg3ppars
+using JLD2, Lux, Random, QG3, NNlib, LuxCUDA, ChainRulesCore
+@load string(dirname(@__DIR__), "/data/t21-precomputed-p.jld2") qg3ppars
 #pre-compute the model 
 qg3ppars = qg3ppars
 x = rand(Float32, 32, 64, 3, 10)
@@ -158,11 +174,11 @@ model = SFNO(qg3ppars,
     n_layers=4,
     lifting_channel_ratio=2,
     projection_channel_ratio=2,
-    channel_mlp_expansion=0.5,
+    channel_mlp_expansion=2,
     activation=NNlib.gelu,
     positional_embedding="no_grid",
 )
-model = SFNO(qg3ppars, QG3.GaussianGridtoSHTransform(qg3ppars, 32, N_batch=size(x, 4)), QG3.SHtoGaussianGridTransform(qg3ppars, 32, N_batch=size(x, 4)),
+model = SFNO(QG3.GaussianGridtoSHTransform(qg3ppars, 32, N_batch=size(x, 4)), QG3.SHtoGaussianGridTransform(qg3ppars, 32, N_batch=size(x, 4)),
     modes = 15,
     in_channels=3,
     out_channels=3,
@@ -170,7 +186,7 @@ model = SFNO(qg3ppars, QG3.GaussianGridtoSHTransform(qg3ppars, 32, N_batch=size(
     n_layers=4,
     lifting_channel_ratio=2,
     projection_channel_ratio=2,
-    channel_mlp_expansion=0.5,
+    channel_mlp_expansion=2,
     activation=NNlib.gelu,
     positional_embedding="no_grid",
 )
@@ -183,18 +199,18 @@ model(x, ps, st)[1]
 using Zygote
 grad = Zygote.gradient(ps -> sum(model(x, ps, st)[1]), ps)
 
-@load string(@__DIR__, "/data/t42-precomputed-p.jld2") qg3ppars
+@load string(dirname(@__DIR__), "/data/t42-precomputed-p.jld2") qg3ppars
 qg3ppars = qg3ppars
 model = SFNO(qg3ppars,
     batch_size=size(x, 4),
-    modes = model.sfno_blocks.layer.spherical_kernel.spherical_conv.modes,
+    modes = model.sfno_blocks.model.spherical_kernel.spherical_conv.modes,
     in_channels=3,
     out_channels=3,
     hidden_channels=32,
     n_layers=4,
     lifting_channel_ratio=2,
     projection_channel_ratio=2,
-    channel_mlp_expansion=0.5,
+    channel_mlp_expansion=2,
     activation=NNlib.gelu,
     positional_embedding="no_grid",
 )

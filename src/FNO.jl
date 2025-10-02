@@ -28,7 +28,7 @@ A layer that combines the Fourier Neural Operator (FNO) with positional embeddin
 struct FourierNeuralOperator <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :fno_blocks, :projection)}
     embedding ::Union{NoOpLayer, GridEmbedding2D, GridEmbedding1D, GridEmbedding3D}
     lifting ::Lux.AbstractLuxLayer
-    fno_blocks ::Union{NewRepeatedLayer{FNO_Block}, NewRepeatedLayer{FNO_Block1D}, NewRepeatedLayer{FNO_Block3D}} 
+    fno_blocks 
     projection ::Lux.AbstractLuxLayer
 end
 
@@ -40,7 +40,7 @@ function FourierNeuralOperator(;
     n_layers::Int=4,
     lifting_channel_ratio::Int=2,
     projection_channel_ratio::Int=2,
-    channel_mlp_expansion::Number=0.5,
+    channel_mlp_expansion::Number=2,
     activation=NNlib.gelu,
     positional_embedding::AbstractString="grid",
 ) where N
@@ -63,7 +63,7 @@ function FourierNeuralOperator(;
             Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity),
         )
         
-        fno_blocks = NewRepeatedLayer(FNO_Block(hidden_channels, n_modes; expansion_factor=channel_mlp_expansion, activation=activation), n_layers)
+        fno_blocks = RepeatedLayer(FNO_Block(hidden_channels, n_modes; expansion_factor=channel_mlp_expansion, activation=activation), repeats=Val(n_layers))
     else 
         if positional_embedding in ["grid1D", "no_grid1D"]
             if positional_embedding == "grid1D"
@@ -83,7 +83,7 @@ function FourierNeuralOperator(;
                 Conv((1,), Int(projection_channel_ratio * hidden_channels) => out_channels, identity),
             )
             
-            fno_blocks = NewRepeatedLayer(FNO_Block1D(hidden_channels, n_modes; expansion_factor=channel_mlp_expansion, activation=activation), n_layers)
+            fno_blocks = RepeatedLayer(FNO_Block1D(hidden_channels, n_modes; expansion_factor=channel_mlp_expansion, activation=activation), repeats=Val(n_layers))
         else
             if positional_embedding in ["grid3D", "no_grid3D"]
                 if positional_embedding == "grid3D"
@@ -103,7 +103,7 @@ function FourierNeuralOperator(;
                     Conv((1, 1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity),
                 )
                 
-                fno_blocks = NewRepeatedLayer(FNO_Block3D(hidden_channels, n_modes; expansion_factor=channel_mlp_expansion, activation=activation), n_layers)
+                fno_blocks = RepeatedLayer(FNO_Block3D(hidden_channels, n_modes; expansion_factor=channel_mlp_expansion, activation=activation), repeats=Val(n_layers))
             else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'grid1D'."))
             end
