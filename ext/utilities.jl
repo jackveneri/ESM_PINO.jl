@@ -38,12 +38,16 @@ function transfer_SFNO_model(model, qg3ppars; batch_size=model.sfno_blocks.model
         in_channels = model.lifting.layers.layer_1.in_chs,
         out_channels = model.projection.layers.layer_2.out_chs, #watch out as you might have more than 2 layers
         hidden_channels = model.sfno_blocks.model.spherical_kernel.spherical_conv.hidden_channels,
-        n_layers = model.sfno_blocks.repeats,
+        n_layers = model.sfno_blocks.nrepeats,
         lifting_channel_ratio=model.lifting_channel_ratio,
         projection_channel_ratio=model.projection_channel_ratio,
         channel_mlp_expansion=model.sfno_blocks.model.channel_mlp.expansion_factor,
         activation = model.sfno_blocks.model.spherical_kernel.activation,
         positional_embedding = model.embedding == NoOpLayer() ? "no_grid" : "grid",
+        gpu = Base.unwrap_unionall(typeof(model.sfno_blocks.model.spherical_kernel.spherical_conv.ggsh)).parameters[end],
+        zsk = model.sfno_blocks.model.spherical_kernel.spherical_conv.zsk,
+        inner_skip = model.sfno_blocks.model.skip,
+        oouter_skip = model.outer_skip
         )
     return superres_model
 end
