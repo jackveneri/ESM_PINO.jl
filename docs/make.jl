@@ -15,10 +15,12 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
+        "Reference" => "ref.md",
     ],
 )
 
 deploydocs(;
-    repo="github.com/jackveneri/ESM_PINO.jl",
+    repo="github.com/jackveneri/ESM_PINO.jl.git",
     devbranch="master",
+    push_preview=true,
 )
