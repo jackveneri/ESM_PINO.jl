@@ -8,6 +8,7 @@ makedocs(;
     authors="Giacomo Veneri <giacomo.veneri@tum.de>",
     sitename="ESM_PINO.jl",
     format=Documenter.HTML(;
+        prettyurls=get(ENV, "CI", "false") == "true",
         canonical="https://jackveneri.github.io/ESM_PINO.jl",
         edit_link="master",
         assets=String[],
