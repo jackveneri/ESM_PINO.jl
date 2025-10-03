@@ -21,6 +21,6 @@ makedocs(;
 
 deploydocs(;
     repo="github.com/jackveneri/ESM_PINO.jl.git",
-    devbranch="master",
+    devbranch="main",
     push_preview=true,
 )
