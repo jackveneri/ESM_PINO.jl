@@ -3,6 +3,27 @@
 
 Combines a SphericalConv layer with a 1x1 convolution in parallel, followed by an activation function.
 Expects input in (spatial..., channel, batch) format.
+# Arguments
+- `hidden_channels`: Number of channels
+- `pars`: Precomputed QG3 model parameters (QG3ModelParameters)
+- `activation`: Activation function applied after combining spatial and spectral branches (default: `NNlib.gelu`)
+- `modes`: Number of spherical harmonic modes to retain (default: `pars.L`)
+- `batch_size`: Batch size for transforms (default: 1)
+- `gpu`: Whether to use GPU (default: true)
+- `zsk`: Whether to use Zonal Symmetric Kernels (ZSK) (default: false)
+
+#Returns
+- `SphericalKernel`: A Lux-compatible layer operating on 4D arrays `[lat,
+
+# Fields
+- `spatial_conv::P`: 1x1 convolution operating directly in the spatial domain
+- `spherical_conv::SphericalalConv`: Spherical convolution layer
+- `activation::F`: Elementwise activation function
+
+# Details
+- The input is processed in parallel by a 1x1 convolution and a spherical convolution
+- Outputs from both branches are summed and passed through the activation
+- Useful for mixing local (spatial) and global (spectral) information
 """
 struct SphericalKernel{P,F} <: Lux.AbstractLuxLayer
     spatial_conv::P  # 1x1 convolution
@@ -15,7 +36,27 @@ function SphericalKernel(hidden_channels::Int, pars::QG3ModelParameters, activat
     spherical = SphericalConv(pars, hidden_channels; modes=modes, batch_size=batch_size, gpu=gpu, zsk=zsk)
     return SphericalKernel(conv, spherical, activation)
 end
+"""
+    function SphericalKernel(hidden_channels::Int, ggsh::QG3.GaussianGridtoSHTransform, shgg::QG3.SHtoGaussianGridTransform, activation=NNlib.gelu; modes::Int=ggsh.output_size[1], zsk::Bool=false)
 
+Construct a SphericalKernel layer using precomputed transforms.
+
+# Arguments
+- `hidden_channels::Int`: Number of channels
+- `ggsh::GaussianGridtoSHTransform`: Transformation from Gaussian grid to spherical harmonics
+- `shgg::SHtoGaussianGridTransform`: Transformation from spherical harmonics back to Gaussian grid
+- `activation`: Activation function applied after combining spatial and spectral branches (default: `NNlib.gelu`)
+- `modes::Int=ggsh.output_size[1]`: Number of spherical harmonic modes to retain (default: `ggsh.output_size[1]`)
+- `zsk::Bool=false`: Whether to use Zonal Symmetric Kernels (ZSK) (default: false)
+
+# Returns
+- `SphericalKernel`: A Lux-compatible layer operating on 4D arrays `[lat, lon, channels, batch]`.
+
+# Fields
+- `spatial_conv::P`: 1x1 convolution operating directly in the spatial domain
+- `spherical_conv::SphericalalConv`: Spherical convolution layer
+- `activation::F`: Elementwise activation function
+"""
 function SphericalKernel(hidden_channels::Int, ggsh::QG3.GaussianGridtoSHTransform, shgg::QG3.SHtoGaussianGridTransform, activation=NNlib.gelu; modes::Int=ggsh.output_size[1], zsk::Bool=false)
     conv = Conv((1,1), hidden_channels => hidden_channels, pad=0, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32)
     spherical = SphericalConv(hidden_channels, ggsh, shgg, modes, zsk=zsk)
@@ -74,7 +115,34 @@ model(x, ps, st)
 """
     SFNO_Block
 
-A block that combines a spectral kernel with a channel MLP. 
+A block that combines a spherical kernel with a channel MLP.
+Expects input in (spatial..., channel, batch) format.
+
+# Arguments
+- `channels::Int`: Number of input/output channels
+- `pars::QG3ModelParameters`: Precomputed QG3 model parameters (QG3ModelParameters)
+- `modes::Int=pars.L`: Number of spherical harmonic modes to retain (default: `pars.L`)
+- `batch_size::Int=1`: Batch size for transforms (default: 1)
+- `expansion_factor::Real=2.0`: Expansion factor for the ChannelMLP (default: 2.0)
+- `activation`: Activation function applied after combining spatial and spectral branches (default: `NNlib.gelu`)
+- `skip::Bool=true`: Whether to include a skip connection (default: true)
+- `gpu::Bool=true`: Whether to use GPU (default: true)
+- `zsk::Bool=false`: Whether to use Zonal Symmetric Kernels (ZSK) (default: false)
+
+# Returns
+- `SFNO_Block`: A Lux-compatible layer operating on 4D arrays `[lat, lon, channels, batch]`.
+
+# Fields
+- `spherical_kernel::SphericalKernel`: Spherical kernel layer
+- `channel_mlp::ChannelMLP`: Channel-wise MLP layer
+- `channels::Int`: Number of input/output channels
+- `skip::Bool`: Whether to include a skip connection
+
+# Details
+- The input is processed by a SphericalKernel followed by a ChannelMLP
+- If `skip` is true, the input is added to the output (residual connection)
+
+
 """
 struct SFNO_Block <: Lux.AbstractLuxLayer
     spherical_kernel :: SphericalKernel
@@ -88,7 +156,37 @@ function SFNO_Block(channels::Int, pars::QG3ModelParameters; modes::Int=pars.L, 
     channel_mlp = ChannelMLP(channels, expansion_factor=expansion_factor, activation=activation)
     return SFNO_Block(spherical_kernel, channel_mlp, channels, skip)
 end
+"""
+    SFNO_Block
 
+A block that combines a spherical kernel with a channel MLP.
+Expects input in (spatial..., channel, batch) format.
+
+# Arguments
+- `channels::Int`: Number of input/output channels
+- `ggsh::GaussianGridtoSHTransform`: Transformation from Gaussian grid to spherical harmonics
+- `shgg::SHtoGaussianGridTransform`: Transformation from spherical harmonics back to Gaussian
+- `modes::Int=ggsh.output_size[1]`: Number of spherical harmonic modes to retain (default: `ggsh.output_size[1]`)
+- `expansion_factor::Real=2.0`: Expansion factor for the ChannelMLP (default: 2.0)
+- `activation`: Activation function applied after combining spatial and spectral branches (default: `NNlib.gelu`)
+- `skip::Bool=true`: Whether to include a skip connection (default: true)
+- `zsk::Bool=false`: Whether to use Zonal Symmetric Kernels (ZSK) (default: false)
+
+# Returns
+- `SFNO_Block`: A Lux-compatible layer operating on 4D arrays `[lat, lon, channels, batch]`.
+
+# Fields
+- `spherical_kernel::SphericalKernel`: Spherical kernel layer
+- `channel_mlp::ChannelMLP`: Channel-wise MLP layer
+- `channels::Int`: Number of input/output channels
+- `skip::Bool`: Whether to include a skip connection
+
+# Details
+- The input is processed by a SphericalKernel followed by a ChannelMLP
+- If `skip` is true, the input is added to the output (residual connection)
+
+
+"""
 function SFNO_Block(channels::Int, ggsh::QG3.GaussianGridtoSHTransform, shgg::QG3.SHtoGaussianGridTransform; modes::Int = ggsh.output_size[1], expansion_factor::Real=2.0, activation=NNlib.gelu, skip::Bool=true, zsk::Bool=false)
     spherical_kernel = SphericalKernel(channels, ggsh, shgg, activation; modes=modes, zsk=zsk)
     channel_mlp = ChannelMLP(channels, expansion_factor=expansion_factor, activation=activation)

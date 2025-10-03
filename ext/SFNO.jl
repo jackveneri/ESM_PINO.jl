@@ -1,22 +1,97 @@
 """
     SFNO
 
-A layer that combines the Spherical Fourier Neural Operator (SFNO) with positional embeddings, spectral kernels, and channel MLPs.
+Spherical Fourier Neural Operator (SFNO) layer combining positional embeddings, spectral kernels, and channel MLPs.
 
-## Arguments
+This layer implements the SFNO architecture on the sphere, optionally using Zonal Symmetric Kernels (ZSK)
+following the approach described in **Spherical Fourier Neural Operators: Learning Stable Dynamics on the Sphere**,
+https://arxiv.org/abs/2204.06408.
+
+# Arguments (primary constructor with `pars::QG3ModelParameters`)
+- `pars::QG3ModelParameters`: Model parameters defining the spherical grid and maximum spherical harmonic degree `L`.
+- `batch_size::Int=1`: Number of samples in a batch.
+- `modes::Int=pars.L`: Maximum number of spherical harmonic modes to use.
 - `in_channels::Int`: Number of input channels.
 - `out_channels::Int`: Number of output channels.
-- `hidden_channels::Int`: Number of hidden channels in the FNO blocks.
-- `pars::QG3ModelParameters`: Parameters for the QG3 model.
-- `n_layers::Int`: Number of FNO blocks (default is 4).
-- `lifting_channel_ratio::Int`: Ratio for the lifting layer (default is 2). 
-- `projection_channel_ratio::Int`: Ratio for the projection layer (default is 2).
-- `channel_mlp_expansion::Number`: Expansion factor for the channel MLP (default is 0.5).
+- `hidden_channels::Int=32`: Number of hidden channels in the SFNO blocks.
+- `n_layers::Int=4`: Number of SFNO blocks.
+- `lifting_channel_ratio::Int=2`: Expansion ratio for the lifting layer.
+- `projection_channel_ratio::Int=2`: Expansion ratio for the projection layer.
+- `channel_mlp_expansion::Number=2.0`: Expansion factor for channel MLPs in each SFNO block.
 - `activation`: Activation function (default is `NNlib.gelu`).
-- `positional_embedding::AbstractString`: Type of positional embedding to use (default is "grid"). Options are "grid", "no_grid".
+- `positional_embedding::AbstractString="grid"`: Type of positional embedding. Options: `"grid"` or `"no_grid"`.
+- `inner_skip::Bool=true`: If true, use skip connections inside each SFNO block.
+- `outer_skip::Bool=true`: If true, apply residual connection from lifting output to projection output.
+- `gpu::Bool=true`: If true, computations are performed on GPU.
+- `zsk::Bool=false`: If true, use Zonal Symmetric Kernels, enforcing longitudinal symmetry.
 
-## Returns
-- `SFNO`: A layer that combines the Spherical Fourier Neural Operator with the specified configurations.
+# Arguments (secondary constructor with `ggsh` and `shgg`)
+- `ggsh::QG3.GaussianGridtoSHTransform`: Precomputed grid-to-SH transform.
+- `shgg::QG3.SHtoGaussianGridTransform`: Precomputed SH-to-grid transform.
+- Other keyword arguments are the same as for the primary constructor, except modes which default is set to `ggsh.output_size[1]`. Also, no need to specify `batch_size` or `gpu` as these are handled in the transforms.
+
+# Returns
+- `SFNO`: A Lux-compatible container layer.
+
+# Details
+- Constructs lifting, SFNO blocks, and projection layers compatible with Lux.jl.
+- Positional embeddings are appended if `positional_embedding="grid"`.
+- Supports both CPU and GPU execution.
+- Zonal Symmetric Kernels (ZSK) reduce the number of parameters and improve stability on spherical domains.
+
+# Example
+```julia
+using Lux, QG3, Random, NNlib, LuxCUDA
+
+# Load precomputed QG3 parameters
+qg3ppars = QG3.load_precomputed_params()[2]
+
+# Input: [lat, lon, channels, batch]
+x = rand(Float32, 32, 64, 3, 10)
+
+# Construct SFNO layer using primary constructor
+model1 = SFNO(qg3ppars;
+    batch_size=size(x, 4),
+    modes=30,
+    in_channels=3,
+    out_channels=3,
+    hidden_channels=32,
+    n_layers=4,
+    lifting_channel_ratio=2,
+    projection_channel_ratio=2,
+    channel_mlp_expansion=2.0,
+    positional_embedding="no_grid",
+    outer_skip=true,
+    gpu=false
+)
+
+# Construct SFNO layer using secondary constructor
+ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, 32, N_batch=size(x,4))
+shgg = QG3.SHtoGaussianGridTransform(qg3ppars, 32, N_batch=size(x,4))
+model2 = SFNO(ggsh, shgg;
+    modes=15,
+    in_channels=3,
+    out_channels=3,
+    hidden_channels=32,
+    n_layers=4,
+    lifting_channel_ratio=2,
+    projection_channel_ratio=2,
+    channel_mlp_expansion=2.0,
+    positional_embedding="no_grid",
+    outer_skip=true,
+    zsk=true
+)
+
+# Setup parameters and state
+rng = Random.default_rng(0)
+ps, st = Lux.setup(rng, model1)
+
+# Forward pass
+y, st = model1(x, ps, st)
+
+# Compute gradients
+using Zygote
+gr = Zygote.gradient(ps -> sum(model1(x, ps, st)[1]), ps)
 """
 struct SFNO <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :sfno_blocks, :projection)}
     embedding ::Union{NoOpLayer, GridEmbedding2D}

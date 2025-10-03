@@ -3,6 +3,21 @@
 
 Spectral convolution layer for Fourier Neural Operator in Lux.jl.
 Expects input in (spatial..., channel, batch) format.
+# Arguments
+- `in_channels`: Number of input channels
+- `out_channels`: Number of output channels
+- `modes`: Tuple specifying number of low-frequency modes to retain along each spatial dimension
+- `T`: Data type for weights (default: ComplexF32)
+- `N`: Number of spatial dimensions (inferred from length of `modes`)
+#Fields
+- `in_channels::Int`: Number of input channels
+- `out_channels::Int`: Number of output channels
+- `modes::NTuple{N,Int}`: Number of low-frequency modes to retain along each spatial dimension
+# Details
+- Uses FFT to transform input to frequency domain, applies learned complex weights to low-frequency modes, and transforms back to spatial domain
+- Pads output back to original spatial dimensions after truncation
+- Weights are initialized with Glorot-like scaling
+
 """
 struct SpectralConv{T,N} <: Lux.AbstractLuxLayer
     in_channels::Int
@@ -96,8 +111,24 @@ end
 """
     SpectralKernel{P,F}
 
-Combines a SpectralConv layer with a 1x1 convolution in parallel, followed by an activation function.
+Combines a SpectralConv layer with a 1x1 convolution in parallel, followed by an activation function.  
 Expects input in (spatial..., channel, batch) format.
+
+# Arguments
+- `in_ch`: Number of input channels
+- `out_ch`: Number of output channels
+- `modes`: Tuple specifying number of low-frequency modes to retain in the spectral branch
+- `activation`: Activation function applied after combining spatial and spectral branches (default: `NNlib.gelu`)
+
+# Fields
+- `spatial_conv::P`: 1x1 convolution operating directly in the spatial domain
+- `spectral_conv::SpectralConv`: Spectral convolution layer
+- `activation::F`: Elementwise activation function
+
+# Details
+- The input is processed in parallel by a 1x1 convolution and a spectral convolution
+- Outputs from both branches are summed and passed through the activation
+- Useful for mixing local (spatial) and global (spectral) information
 """
 struct SpectralKernel{P,F} <: Lux.AbstractLuxLayer
     spatial_conv::P  # 1x1 convolution
@@ -140,7 +171,19 @@ end
 """
     SoftGating(channels::Int)
 
-A soft gating layer that applies per-channel multiplicative scaling.
+A soft gating layer that applies per-channel multiplicative scaling.  
+Expects input in (height, width, channels, batch) format.
+
+# Arguments
+- `channels`: Number of channels in the input
+
+# Fields
+- `channels::Int`: Number of channels
+
+# Details
+- Learns a single scalar weight per channel
+- Weights are initialized to 1.0 (identity scaling)
+- Useful for lightweight residual or skip connections
 """
 struct SoftGating <: Lux.AbstractLuxLayer
     channels::Int
@@ -162,7 +205,23 @@ end
 """
     ChannelMLP(channels::Int; expansion_factor=2.0, activation=gelu)
 
-Implements a channel-wise MLP with a skip connection.
+Implements a channel-wise MLP with a skip connection.  
+Expects input in (height, width, channels, batch) format.
+
+# Arguments
+- `channels`: Number of input/output channels
+- `expansion_factor`: Factor to expand hidden layer size (default: 2.0)
+- `activation`: Nonlinear activation function in hidden layer (default: `NNlib.gelu`)
+
+# Fields
+- `mlp::M`: Two-layer Conv-based MLP with hidden dimension = `expansion_factor * channels`
+- `skip::S`: Skip connection implemented as a `SoftGating` layer
+- `expansion_factor::Number`: Factor controlling hidden dimension size
+
+# Details
+- Expands channels with a 1x1 convolution, applies nonlinearity, then projects back
+- Adds gated skip connection to stabilize training
+- Functions similarly to a feed-forward block in transformers
 """
 struct ChannelMLP{M,S} <: Lux.AbstractLuxLayer
     mlp::M
@@ -199,7 +258,8 @@ function (layer::ChannelMLP)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
 end
 
 """
-meshgrid(x, y)
+    meshgrid(x, y)
+
 Generates a 2D meshgrid from vectors `x` and `y`.
 """
 function meshgrid(x, y)
@@ -209,7 +269,20 @@ end
 """
     GridEmbedding2D(grid_boundaries=[[0f0, 1f0], [0f0, 1f0]])
 
-Positional embedding that appends a normalized 2D coordinate grid to input data.
+Positional embedding that appends normalized 2D coordinates to the input.  
+Expects input in (height, width, channels, batch) format.
+
+# Arguments
+- `grid_boundaries`: Vector of two intervals `[x_min, x_max]`, `[y_min, y_max]` specifying coordinate range along each axis
+
+# Fields
+- `boundaries_x::Vector{Float32}`: Range boundaries for x-coordinate
+- `boundaries_y::Vector{Float32}`: Range boundaries for y-coordinate
+
+# Details
+- Constructs a 2D meshgrid of coordinates normalized to `[x_min, x_max] × [y_min, y_max]`
+- Repeats coordinate grids across batch dimension
+- Concatenates `grid_x` and `grid_y` as extra channels to the input
 """
 struct GridEmbedding2D <: Lux.AbstractLuxLayer
     boundaries_x::Vector{Float32}
@@ -244,9 +317,27 @@ end
 ChainRulesCore.@non_differentiable (layer::GridEmbedding2D)(::Any)
 
 """
-    FNO_Block{N}
+    FNO_Block(channels::Int, modes::NTuple{2,Int}; expansion_factor=2, activation=gelu)
 
-A block that combines a spectral kernel with a channel MLP. 
+A block that combines a SpectralKernel with a ChannelMLP.  
+Expects input in (height, width, channels, batch) format.
+
+# Arguments
+- `channels`: Number of input/output channels
+- `modes`: Tuple specifying number of low-frequency modes for the spectral convolution
+- `expansion_factor`: Factor controlling hidden dimension size in ChannelMLP (default: 2)
+- `activation`: Nonlinear activation function (default: `NNlib.gelu`)
+
+# Fields
+- `spectral_kernel::SpectralKernel`: Combines spectral and spatial convolutions
+- `channel_mlp::ChannelMLP`: Channel-wise MLP with skip connection
+- `channels::Int`: Number of channels
+- `modes::NTuple{2,Int}`: Retained Fourier modes
+
+# Details
+- Applies spectral kernel to mix global/local features
+- Follows with a channel MLP for nonlinear channel mixing
+- Forms the core computational unit of a Fourier Neural Operator
 """
 struct FNO_Block <: Lux.AbstractLuxLayer
     spectral_kernel :: SpectralKernel

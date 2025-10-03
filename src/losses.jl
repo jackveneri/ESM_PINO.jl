@@ -40,11 +40,11 @@ Generate wavenumber array for spectral differentiation.
 - `u`: Template array for dimensions
 - `L`: Domain length
 
-# Retuu_t1ns
-- `k`: Wt2venumber array on GPU, reshaped for broadcastingt2
-# Det2ails
+# Returns
+- `k`: Wavenumber array on GPU, reshaped for broadcasting
+# Details
 - Handles even/odd array sizes differently
-- Autt2matically converts to GPU array
+- Automatically converts to GPU array
 - Returns array with singleton dimensions for ND broadcasting
 """
 function compute_k(u::AbstractArray{T}, L::T) where T<:Real
@@ -60,7 +60,7 @@ function compute_k(u::AbstractArray{T}, L::T) where T<:Real
     freq_gpu = CUDA.cu(T.(freq))
     k = (2π/L) .* freq_gpu
     
-    #u_t1Add singleton dimensions to match input dimensions
+    #Add singleton dimensions to match input dimensions
     return reshape(k, (size(k)..., ntuple(_->1, ndims(u)-1)...))
 end
 
@@ -94,6 +94,7 @@ function dealias(u_hat::AbstractArray{Complex{T}}, L::T) where T<:Real
 end
 """
     SpectralPhysicsLossParameters(ν::Float64, L::Float64, N_t::Int, t_max::Float64, t_min::Float64, Δt::Float64, x_σ::Float64, x_μ::Float64)
+
 Create a struct to hold parameters for spectral physics loss.
 
 # Fields
@@ -120,6 +121,7 @@ function SpectralPhysicsLossParameters(ν::Float64, L::Float32, t_step_length::F
 end
 """
     create_physics_loss()
+
 helper function to create a physics loss function.
 
 # Arguments
@@ -154,6 +156,7 @@ end
 
 """
     FDPhysicsLossParameters(ν::Float64, N_t::Int, t_max::Float64, t_min::Float64, Δt::Float64, x_σ::Float64, x_μ::Float64, M1_gpu::AbstractArray, M2_gpu::AbstractArray)
+
 Create a struct to hold parameters for finite difference physics loss.
 
 # Fields
@@ -225,6 +228,7 @@ end
     
 """
     autoregressive_loss(model::StatefulLuxLayer, (u0, target)::Tuple{AbstractArray, AbstractArray}, n_steps::Int, params::FDPhysicsLossParameters, λ::Float32)
+
 Compute autoregressive loss for a model over multiple time steps.
 # Arguments 
 - `model`: StatefulLuxLayer model
