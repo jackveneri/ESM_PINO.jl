@@ -1,2 +1,6 @@
 [deps]
+ESM_PINO = "0812bf53-9fd7-49da-8b9b-5b8cac2079bc"
+Lux = "b2108857-7c20-44ae-9111-449ecde12c47"
 LuxTestUtils = "ac9de150-d08f-4546-94fb-7472b5760531"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
