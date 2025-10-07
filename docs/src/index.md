@@ -8,4 +8,3 @@ Documentation for [ESM_PINO](https://github.com/jackveneri/ESM_PINO.jl).
 
 ```@index
 ```
-

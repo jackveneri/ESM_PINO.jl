@@ -99,13 +99,11 @@ Create a struct to hold parameters for spectral physics loss.
 
 # Fields
 - `ν`: Viscosity (scalar)
+- `Δt`: Time dimension array index spacing from original array (scalar)
 - `L`: Domain size (scalar)
-- `N_t`: Number of time steps (integer)
-- `t_max`: Maximum time (scalar)
-- `t_min`: Minimum time (scalar)
-- `Δt`: Time step size (scalar)
 - `x_σ`: Standard deviation for normalization (scalar)
 - `x_μ`: Mean for normalization (scalar)
+- `t_step_length`: Time step length (scalar)
 """
 struct SpectralPhysicsLossParameters
     ν::Float64
@@ -161,7 +159,10 @@ Create a struct to hold parameters for finite difference physics loss.
 
 # Fields
 - `ν`: Viscosity (scalar)
+- `Δt`: time dimension array spacing of original dataset array (integer)
 - 't_step_length`: Time step length (scalar)
+- `x_σ`: Standard deviation from normalization (scalar)
+- `x_μ`: Mean from normalization (scalar)
 - `M1_gpu`: Second derivative FD matrix (GPU array)
 - `M2_gpu`: First derivative FD matrix (GPU array)
 """

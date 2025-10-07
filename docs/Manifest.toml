@@ -2,7 +2,7 @@
 
 julia_version = "1.11.7"
 manifest_format = "2.0"
-project_hash = "5337acb169dd31f8b868850b58325643d9d9a9e4"
+project_hash = "7be95e10bf1482539f28ba156bc91f8f1820cbf4"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "27cecae79e5cc9935255f90c53bb831cc3c870d7"
@@ -729,6 +729,12 @@ version = "0.25.121"
     DensityInterface = "b429d917-457f-4dbc-8f4c-0cc954292b1d"
     Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
+[[deps.DocInventories]]
+deps = ["CodecZlib", "Downloads", "TOML"]
+git-tree-sha1 = "e97cfa8680a39396924dcdca4b7ff1014ed5c499"
+uuid = "43dc2714-ed3b-44b5-b226-857eda1aa7de"
+version = "1.0.0"
+
 [[deps.DocStringExtensions]]
 git-tree-sha1 = "7442a5dfe1ebb773c29cc2962a8980f47221d76c"
 uuid = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
@@ -746,13 +752,25 @@ git-tree-sha1 = "1eef850e88afab219e555678868d83aa901a360b"
 uuid = "35a29f4d-8980-5a13-9543-d66fff28ecb8"
 version = "0.1.20"
 
+[[deps.DocumenterVitepress]]
+deps = ["ANSIColoredPrinters", "Base64", "DocInventories", "DocStringExtensions", "Documenter", "IOCapture", "Markdown", "NodeJS_20_jll", "REPL", "TOML"]
+git-tree-sha1 = "75f1217667bad95351da47c80ba3b92b4ea9c58e"
+uuid = "4710194d-e776-4893-9690-8d956a29c365"
+version = "0.2.6"
+
+    [deps.DocumenterVitepress.extensions]
+    DocumenterVitepressDocumenterCitationsExt = "DocumenterCitations"
+
+    [deps.DocumenterVitepress.weakdeps]
+    DocumenterCitations = "daee34ce-89f3-4625-b898-19384cb65244"
+
 [[deps.Downloads]]
 deps = ["ArgTools", "FileWatching", "LibCURL", "NetworkOptions"]
 uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 version = "1.6.0"
 
 [[deps.ESM_PINO]]
-deps = ["AbstractFFTs", "Adapt", "BenchmarkTools", "CFTime", "CUDA", "CairoMakie", "ChainRulesCore", "ComponentArrays", "Dates", "Documenter", "FFTW", "JLD2", "LinearAlgebra", "Lux", "LuxCUDA", "MLUtils", "NNlib", "NetCDF", "OnlineStats", "Optimisers", "OrdinaryDiffEq", "ParameterSchedulers", "Plots", "Random", "SparseArrays", "Statistics", "Zygote"]
+deps = ["AbstractFFTs", "Adapt", "BenchmarkTools", "CFTime", "CUDA", "CairoMakie", "ChainRulesCore", "ComponentArrays", "Dates", "Documenter", "FFTW", "JLD2", "Lux", "LuxCUDA", "MLUtils", "NNlib", "NetCDF", "OnlineStats", "Optimisers", "OrdinaryDiffEq", "ParameterSchedulers", "Plots", "Statistics", "Zygote"]
 path = ".."
 uuid = "0812bf53-9fd7-49da-8b9b-5b8cac2079bc"
 version = "1.0.0-DEV"
@@ -2174,6 +2192,12 @@ version = "1.1.1"
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
 version = "1.2.0"
+
+[[deps.NodeJS_20_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "0b1b4a83773cfdefa5d9dc0322e4c0624ce88b5b"
+uuid = "c7aee132-11e1-519c-8219-0a43005e73c2"
+version = "20.12.2+0"
 
 [[deps.NonlinearSolve]]
 deps = ["ADTypes", "ArrayInterface", "BracketingNonlinearSolve", "CommonSolve", "ConcreteStructs", "DifferentiationInterface", "FastClosures", "FiniteDiff", "ForwardDiff", "LineSearch", "LinearAlgebra", "LinearSolve", "NonlinearSolveBase", "NonlinearSolveFirstOrder", "NonlinearSolveQuasiNewton", "NonlinearSolveSpectralMethods", "PrecompileTools", "Preferences", "Reexport", "SciMLBase", "SimpleNonlinearSolve", "StaticArraysCore", "SymbolicIndexingInterface"]
