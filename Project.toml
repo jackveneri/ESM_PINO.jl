@@ -80,3 +80,6 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
 test = ["Lux", "LuxTestUtils", "QG3", "Test"]
+
+[sources]
+QG3 = {url = "https://github.com/maximilian-gelbrecht/QG3.jl"}
