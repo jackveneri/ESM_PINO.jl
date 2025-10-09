@@ -9,16 +9,15 @@ makedocs(;
     modules=[ESM_PINO, ESM_PINOQG3Ext],
     authors="Giacomo Veneri <giacomo.veneri@tum.de>",
     sitename="ESM_PINO.jl",
-    devbranch = "main",
-    devurl = "dev",
-    format=DocumenterVitepress.MarkdownVitepress(repo = "github.com/jackveneri/ESM_PINO.jl.git"),
+    format=DocumenterVitepress.MarkdownVitepress(repo = "github.com/jackveneri/ESM_PINO.jl.git",devbranch = "main",
+    devurl = "dev",),
     pages=[
         "Home" => "index.md",
         "Reference" => "ref.md",
     ],
 )
 
-deploydocs(;
+DocumenterVitepress.deploydocs(;
     repo="github.com/jackveneri/ESM_PINO.jl.git",
     target = joinpath(@__DIR__,"build"),
     branch = "gh-pages",
