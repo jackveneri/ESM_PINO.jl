@@ -75,7 +75,12 @@ Create a struct to hold parameters for QG3 physics loss.
 
 # Fields
 - `dt`: Time step (scalar)
-- `rhs`: Right-hand side of the QG3 equation (array)
+- `qg3p`: QG3 model parameters 
+- `S`: precomputed forcing
+- `ggsh`: Gaussian grid to spherical harmonics transform
+- `shgg`: Spherical harmonics to Gaussian grid transform
+- `μ`: Mean from data normalization
+- `σ`: Standard deviation from data normalization
 """
 struct QG3_Physics_Parameters
     dt::Float64

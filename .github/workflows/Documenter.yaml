@@ -16,12 +16,20 @@ jobs:
       statuses: write
     runs-on: ubuntu-latest
     steps:
+      - name: Clean npm cache and install VitePress
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nodejs npm
+          cd docs/build/.documenter || exit 0
+          rm -rf node_modules package-lock.json
+          cd -
+          npm install -g vitepress
       - uses: actions/checkout@v5
       - uses: julia-actions/setup-julia@latest
         with:
           version: '1.11'
       - name: Install dependencies
-        run: julia --color=yes --project=docs/ -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+        run: julia --color=yes --project=docs/ -e 'using Pkg;Pkg.develop(PackageSpec(url="https://github.com/maximilian-gelbrecht/QG3.jl")); Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
       - name: Build and deploy
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # For authentication with GitHub Actions token
