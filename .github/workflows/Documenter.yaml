@@ -16,6 +16,11 @@ jobs:
       statuses: write
     runs-on: ubuntu-latest
     steps:
+      - name: Install Node.js and VitePress
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nodejs npm
+          npm install -g vitepress
       - uses: actions/checkout@v5
       - uses: julia-actions/setup-julia@latest
         with:
