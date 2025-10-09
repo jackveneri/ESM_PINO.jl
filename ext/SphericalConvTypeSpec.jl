@@ -1,3 +1,4 @@
+using Lux, Random, QG3, NNlib
 """
     SphericalConv(hidden_channels::Int, ggsh::GaussianGridtoSHTransform, shgg::SHtoGaussianGridTransform; modes::Int=ggsh.output_size[1], zsk::Bool=false)
 
