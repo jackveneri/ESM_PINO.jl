@@ -11,7 +11,7 @@ makedocs(;
     sitename="ESM_PINO.jl",
     repo="https://github.com/jackveneri/ESM_PINO.jl.git",
     format=DocumenterVitepress.MarkdownVitepress(repo = "github.com/jackveneri/ESM_PINO.jl.git", devbranch = "main",
-    devurl = "dev",),
+    devurl = "dev"),
     pages=[
         "Home" => "index.md",
         "Reference" => "ref.md",
@@ -20,7 +20,7 @@ makedocs(;
 
 DocumenterVitepress.deploydocs(;
     repo="github.com/jackveneri/ESM_PINO.jl.git",
-    target = "build",
+    target="build",
     devbranch="main",
     push_preview=true,
 )
