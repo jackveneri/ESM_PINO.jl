@@ -1,16 +1,15 @@
 {
-  "name": "docs",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
   "scripts": {
-    "docs:build": "vitepress build",
-    "docs:preview": "vitepress preview"
+    "docs:dev": "vitepress dev build/.documenter",
+    "docs:build": "vitepress build build/.documenter",
+    "docs:preview": "vitepress preview build/.documenter"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "devDependencies": {
-    "vitepress": "^1.6.4"
+  "dependencies": {
+    "@nolebase/vitepress-plugin-enhanced-readabilities": "^2.14.0",
+    "markdown-it": "^14.1.0",
+    "markdown-it-footnote": "^4.0.0",
+    "markdown-it-mathjax3": "^4.3.2",
+    "vitepress": "^1.6.3",
+    "vitepress-plugin-tabs": "^0.6.0"
   }
 }
