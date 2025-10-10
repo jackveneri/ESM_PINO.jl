@@ -24,6 +24,7 @@ jobs:
           rm -rf node_modules package-lock.json
           cd -
           npm install -g vitepress
+          export PATH="$(npm bin -g):$PATH"
       - uses: actions/checkout@v5
       - uses: julia-actions/setup-julia@latest
         with:
