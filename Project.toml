@@ -36,6 +36,9 @@ Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 QG3 = "d558103f-7907-4730-8f30-3d9252e5a318"
 SpeedyWeather = "9e226e20-d153-4fed-8a5b-493def4f21a9"
 
+[sources.QG3]
+url = "https://github.com/maximilian-gelbrecht/QG3.jl"
+
 [extensions]
 ESM_PINOQG3Ext = "QG3"
 ESM_PINOSpeedyWeatherExt = "SpeedyWeather"
@@ -46,7 +49,7 @@ Adapt = "4.3.0"
 BenchmarkTools = "1.6.0"
 CFTime = "0.2.1"
 CUDA = "5.7.3"
-CairoMakie = "0.13.4"
+CairoMakie = "0.13.4, 0.15"
 ChainRulesCore = "1.25.1"
 ComponentArrays = "0.15.26"
 Dates = "1.11.0"
@@ -80,6 +83,3 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
 test = ["Lux", "LuxTestUtils", "QG3", "Test"]
-
-[sources]
-QG3 = {url = "https://github.com/maximilian-gelbrecht/QG3.jl"}
