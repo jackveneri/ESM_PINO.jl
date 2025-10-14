@@ -34,7 +34,7 @@ Compute residual loss for QG3 equation.
 - Precomputed right-hand side `rhs` (global variable) computed using QG3.QG3MM_gpu
 - Precomputed time step `dt` (global variable) in QG3 units
 """
-@views function physics_informed_loss_QG3(u::StatefulLuxLayer, q_0::AbstractArray)
+@views function physics_informed_loss_QG3(u::Lux.StatefulLuxLayer, q_0::AbstractArray)
     q_pred = u(q_0)
     ∂u_∂t = (q_pred .- q_0) ./ dt
     residual = ∂u_∂t .- rhs
@@ -59,7 +59,7 @@ Combined physics-data loss function for QG3.
     - Updated state
     - Named tuple with loss components (physics_loss, data_loss)
 """
-function QG3_loss_function(model::AbstractLuxLayer, ps::NamedTuple, st::NamedTuple, (u_t1, target_data)::Tuple{AbstractArray, AbstractArray}; α::Float32=0.5f0)
+function QG3_loss_function(model::Lux.AbstractLuxLayer, ps::NamedTuple, st::NamedTuple, (u_t1, target_data)::Tuple{AbstractArray, AbstractArray}; α::Float32=0.5f0)
     u_net = StatefulLuxLayer{true}(model, ps, st)
     data_loss = mse_loss_function(u_net, target_data, u_t1)
     physics_loss = physics_informed_loss_QG3(u_net, u_t1)
@@ -93,8 +93,8 @@ Helper function to create a QG3 physics loss function.
 # Arguments
 - `params`: parameters struct, pass nothing to create a zero loss function.
 """
-function create_QG3_physics_loss(params::QG3_Physics_Parameters)
-    @views function QG3_physics_loss(u::StatefulLuxLayer, q_0::AbstractArray{T,4}) where T<:Real
+function create_QG3_physics_loss(params::QG3.QG3_Physics_Parameters)
+    @views function QG3_physics_loss(u::Lux.StatefulLuxLayer, q_0::AbstractArray{T,4}) where T<:Real
         q_pred = u(q_0) .* params.σ .+ params.μ
         #bc_loss = mean(abs2, q_pred[:,1:1,:,:] .- q_pred[:,end:end,:,:])
         q_0_denormalized = q_0 .* params.σ .+ params.μ
@@ -119,13 +119,13 @@ function create_QG3_physics_loss(params::QG3_Physics_Parameters)
 end
 
 function create_QG3_physics_loss(::Nothing)
-    function QG3_physics_loss(u::StatefulLuxLayer, q_0::AbstractArray)
+    function QG3_physics_loss(u::Lux.StatefulLuxLayer, q_0::AbstractArray)
         return 0.f0
     end
     return QG3_physics_loss
 end
 
-function mse_loss_function_QG3(u::StatefulLuxLayer, target::AbstractArray, u_t1::AbstractArray)
+function mse_loss_function_QG3(u::Lux.StatefulLuxLayer, target::AbstractArray, u_t1::AbstractArray)
     return MSELoss()(u(u_t1), target)
 end
 """

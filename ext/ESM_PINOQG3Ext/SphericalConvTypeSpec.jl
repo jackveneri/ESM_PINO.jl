@@ -143,7 +143,7 @@ function SphericalConv(
     SphericalConv(hidden_channels, ggsh, shgg, corrected_modes, zsk=zsk)
 end
 
-function Lux.initialparameters(rng::AbstractRNG, layer::SphericalConv{G,S}) where {G,S}
+function Lux.initialparameters(rng::Random.AbstractRNG, layer::SphericalConv{G,S}) where {G,S}
     init_std = typeof(layer.ggsh).parameters[1](sqrt(2 / layer.hidden_channels))
     # Initialize 2D weights for spatial pattern (L × M)
     if layer.zsk == true
@@ -154,7 +154,7 @@ function Lux.initialparameters(rng::AbstractRNG, layer::SphericalConv{G,S}) wher
     return (weight=weight,)
 end
 
-Lux.initialstates(rng::AbstractRNG, layer::SphericalConv) = NamedTuple()
+Lux.initialstates(rng::Random.AbstractRNG, layer::SphericalConv) = NamedTuple()
 
 function (layer::SphericalConv{G,S})(x::AbstractArray{T,4}, ps::NamedTuple, st::NamedTuple) where {G,S,T} 
     @assert T == typeof(layer.ggsh).parameters[1] "Input type $T does not match model parameter type $(typeof(layer.ggsh).parameters[1]))"

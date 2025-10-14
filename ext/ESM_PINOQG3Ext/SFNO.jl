@@ -103,7 +103,7 @@ struct SFNO <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :sfno_blocks
     projection_channel_ratio::Int
 end
 
-function SFNO(pars::QG3ModelParameters;
+function SFNO(pars::QG3.QG3ModelParameters;
     batch_size::Int=1,
     modes::Int=pars.L,
     in_channels::Int,
@@ -189,7 +189,7 @@ function SFNO(
     return SFNO(embedding, lifting, sfno_blocks, projection, outer_skip, lifting_channel_ratio, projection_channel_ratio) 
 end
 
-function Lux.initialparameters(rng::AbstractRNG, layer::SFNO)
+function Lux.initialparameters(rng::Random.AbstractRNG, layer::SFNO)
     ps_embedding = isnothing(layer.embedding) ? NamedTuple() : Lux.initialparameters(rng, layer.embedding)
     ps_lifting = Lux.initialparameters(rng, layer.lifting)
     ps_sfno_blocks = Lux.initialparameters(rng, layer.sfno_blocks)
@@ -202,7 +202,7 @@ function Lux.initialparameters(rng::AbstractRNG, layer::SFNO)
     )
 end
 
-function Lux.initialstates(rng::AbstractRNG, layer::SFNO)
+function Lux.initialstates(rng::Random.AbstractRNG, layer::SFNO)
     st_embedding = isnothing(layer.embedding) ? NamedTuple() : Lux.initialstates(rng, layer.embedding)
     st_lifting = Lux.initialstates(rng, layer.lifting)
     st_sfno_blocks = Lux.initialstates(rng, layer.sfno_blocks)

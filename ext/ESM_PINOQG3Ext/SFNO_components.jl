@@ -31,7 +31,7 @@ struct SphericalKernel{P,F} <: Lux.AbstractLuxLayer
     activation::F    # Activation function
 end
 
-function SphericalKernel(hidden_channels::Int, pars::QG3ModelParameters, activation=NNlib.gelu; modes::Int=pars.L, batch_size::Int=1, gpu::Bool=true, zsk::Bool=false) 
+function SphericalKernel(hidden_channels::Int, pars::QG3.QG3ModelParameters, activation=NNlib.gelu; modes::Int=pars.L, batch_size::Int=1, gpu::Bool=true, zsk::Bool=false) 
     conv = Conv((1,1), hidden_channels => hidden_channels, pad=0, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32)
     spherical = SphericalConv(pars, hidden_channels; modes=modes, batch_size=batch_size, gpu=gpu, zsk=zsk)
     return SphericalKernel(conv, spherical, activation)
@@ -63,13 +63,13 @@ function SphericalKernel(hidden_channels::Int, ggsh::QG3.GaussianGridtoSHTransfo
     return SphericalKernel(conv, spherical, activation)
 end
 
-function Lux.initialparameters(rng::AbstractRNG, layer::SphericalKernel)
+function Lux.initialparameters(rng::Random.AbstractRNG, layer::SphericalKernel)
     ps_conv = Lux.initialparameters(rng, layer.spatial_conv)
     ps_spherical = Lux.initialparameters(rng, layer.spherical_conv)
     return (spatial=ps_conv, spherical=ps_spherical)
 end
 
-function Lux.initialstates(rng::AbstractRNG, layer::SphericalKernel)
+function Lux.initialstates(rng::Random.AbstractRNG, layer::SphericalKernel)
     st_conv = Lux.initialstates(rng, layer.spatial_conv)
     st_spherical = Lux.initialstates(rng, layer.spherical_conv)
     return (spatial=st_conv, spherical=st_spherical)
@@ -151,7 +151,7 @@ struct SFNO_Block <: Lux.AbstractLuxLayer
     skip :: Bool
 end
 
-function SFNO_Block(channels::Int, pars::QG3ModelParameters; modes::Int=pars.L, batch_size::Int=1, expansion_factor::Real=2.0, activation=NNlib.gelu, skip::Bool=true, gpu::Bool=true, zsk::Bool=false)
+function SFNO_Block(channels::Int, pars::QG3.QG3ModelParameters; modes::Int=pars.L, batch_size::Int=1, expansion_factor::Real=2.0, activation=NNlib.gelu, skip::Bool=true, gpu::Bool=true, zsk::Bool=false)
     spherical_kernel = SphericalKernel(channels, pars, activation; modes=modes, batch_size=batch_size, gpu=gpu, zsk=zsk)
     channel_mlp = ChannelMLP(channels, expansion_factor=expansion_factor, activation=activation)
     return SFNO_Block(spherical_kernel, channel_mlp, channels, skip)
@@ -193,13 +193,13 @@ function SFNO_Block(channels::Int, ggsh::QG3.GaussianGridtoSHTransform, shgg::QG
     return SFNO_Block(spherical_kernel, channel_mlp, channels, skip)
 end
 
-function Lux.initialparameters(rng::AbstractRNG, block::SFNO_Block)
+function Lux.initialparameters(rng::Random.AbstractRNG, block::SFNO_Block)
     ps_spherical = Lux.initialparameters(rng, block.spherical_kernel)
     ps_channel = Lux.initialparameters(rng, block.channel_mlp)
     return (spherical_kernel=ps_spherical, channel_mlp=ps_channel)
 end
 
-function Lux.initialstates(rng::AbstractRNG, block::SFNO_Block)
+function Lux.initialstates(rng::Random.AbstractRNG, block::SFNO_Block)
     st_spherical = Lux.initialstates(rng, block.spherical_kernel)
     st_channel = Lux.initialstates(rng, block.channel_mlp)
     return (spherical_kernel=st_spherical, channel_mlp=st_channel)
