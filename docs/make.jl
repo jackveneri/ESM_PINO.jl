@@ -7,7 +7,6 @@ makedocs(;
     modules=[ESM_PINO],
     authors="Giacomo Veneri <giacomo.veneri@tum.de>",
     sitename="ESM_PINO.jl",
-    remotes = Dict("ESM_PINO" => Documenter.Remotes.GitHub("jackveneri", "ESM_PINO.jl")), 
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
         canonical="https://jackveneri.github.io/ESM_PINO.jl",
