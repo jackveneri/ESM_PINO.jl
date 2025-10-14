@@ -94,7 +94,7 @@ using Zygote
 gr = Zygote.gradient(ps -> sum(model1(x, ps, st)[1]), ps)
 """
 struct SFNO <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :sfno_blocks, :projection)}
-    embedding ::Union{NoOpLayer, GridEmbedding2D}
+    embedding ::Union{Lux.NoOpLayer, GridEmbedding2D}
     lifting ::Lux.AbstractLuxLayer
     sfno_blocks ::Lux.AbstractLuxLayer
     projection ::Lux.AbstractLuxLayer
@@ -126,16 +126,16 @@ function SFNO(pars::QG3.QG3ModelParameters;
             embedding = GridEmbedding2D()
             in_channels += 2
         else
-            embedding = NoOpLayer()
+            embedding = Lux.NoOpLayer()
         end
-        lifting = Chain(
-            Conv((1, 1), in_channels => Int(lifting_channel_ratio * hidden_channels), activation, cross_correlation=true, init_weight=kaiming_normal; init_bias=zeros32),
-            Conv((1, 1), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+        lifting = Lux.Chain(
+            Lux.Conv((1, 1), in_channels => Int(lifting_channel_ratio * hidden_channels), activation, cross_correlation=true, init_weight=kaiming_normal; init_bias=zeros32),
+            Lux.Conv((1, 1), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
         )
         
-        projection = Chain(
-            Conv((1, 1), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation,cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
-            Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+        projection = Lux.Chain(
+            Lux.Conv((1, 1), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation,cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+            Lux.Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
         )
         
         sfno_blocks = Lux.RepeatedLayer(SFNO_Block(hidden_channels, pars; modes=modes, batch_size=batch_size, expansion_factor=channel_mlp_expansion, activation=activation, skip=inner_skip, gpu=gpu, zsk=zsk), repeats=Val(n_layers))
@@ -169,16 +169,16 @@ function SFNO(
             embedding = GridEmbedding2D()
             in_channels += 2
         else
-            embedding = NoOpLayer()
+            embedding = Lux.NoOpLayer()
         end
-         lifting = Chain(
-            Conv((1, 1), in_channels => Int(lifting_channel_ratio * hidden_channels), activation, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
-            Conv((1, 1), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+         lifting = Lux.Chain(
+            Lux.Conv((1, 1), in_channels => Int(lifting_channel_ratio * hidden_channels), activation, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+            Lux.Conv((1, 1), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
         )
         
-        projection = Chain(
-            Conv((1, 1), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
-            Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+        projection = Lux.Chain(
+            Lux.Conv((1, 1), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+            Lux.Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
         )
         
         sfno_blocks = Lux.RepeatedLayer(SFNO_Block(hidden_channels, ggsh, shgg; modes=modes, expansion_factor=channel_mlp_expansion, activation=activation, skip=inner_skip, zsk=zsk), repeats=Val(n_layers))

@@ -327,3 +327,24 @@ function create_autoregressive_loss_function(params::FDPhysicsLossParameters)
     end 
     return loss_function
 end
+"""
+    select_loss_function()
+Helper function to pass a valid loss function to Training.single_train_step.
+Selects a loss function based on the provided physics-informed loss function, in the standard workflow generated with create_physics_loss.
+
+# Arguments
+- `PI_loss`: Physics-informed loss function (default is a zero loss function)
+"""
+function select_loss_function(PI_loss::Function=create_physics_loss(nothing); subsampling::Int=1, α::Float32=0.5f0)
+    function loss_function(model::Lux.AbstractLuxLayer, ps::NamedTuple, st::NamedTuple, (u_t1, target_data)::Tuple{AbstractArray, AbstractArray}; α=α)
+        u_net = StatefulLuxLayer{true}(model, ps, st)
+        data_loss = mse_loss_function(u_net, target_data, u_t1; subsampling=subsampling)
+        physics_loss = PI_loss(u_net, u_t1)
+        loss = (1 - α) * physics_loss + α * data_loss
+        return (loss,
+            (st),
+            (;physics_loss, data_loss)
+        )
+    end
+    return loss_function
+end
