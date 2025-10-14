@@ -1,13 +1,14 @@
 module ESM_PINOQG3Ext
 
 using ESM_PINO
-using QG3, Lux, LuxCUDA, Random, Optimisers, Zygote, NNlib, ChainRulesCore
+import QG3
+import Lux, Random, Zygote, NNlib
  
-include("SphericalConvTypeSpec.jl")
-include("SFNO_components.jl")
-include("SFNO.jl")
-include("losses.jl")
-include("utilities.jl")
+include("ESM_PINOQG3Ext/SphericalConvTypeSpec.jl")
+include("ESM_PINOQG3Ext/SFNO_components.jl")
+include("ESM_PINOQG3Ext/SFNO.jl")
+include("ESM_PINOQG3Ext/losses.jl")
+include("ESM_PINOQG3Ext/utilities.jl")
 
 export SFNO
 

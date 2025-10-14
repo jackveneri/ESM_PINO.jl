@@ -49,7 +49,7 @@ y, st = layer(x, ps, st)
 using Zygote
 gr = Zygote.gradient(ps -> sum(layer(x, ps, st)[1]), ps)
 """
-struct SphericalConv{G,S} <: Lux.AbstractLuxLayer 
+struct SphericalConv{G,S} <: ESM_PINO.AbstractSphericalConv 
     hidden_channels::Int
     modes::Int
     ggsh::G  # GaussianGridtoSHTransform
