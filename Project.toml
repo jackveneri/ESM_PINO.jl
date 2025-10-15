@@ -83,3 +83,4 @@ test = ["Lux", "LuxTestUtils", "QG3", "Test"]
 
 [sources]
 QG3 = {url = "https://github.com/maximilian-gelbrecht/QG3.jl"}
+

@@ -1,6 +1,6 @@
-# Reference
+# Reference 
 
 ```@autodocs
-Modules = [ESM_PINO, ESM_PINOQG3Ext]
+Modules = [ESM_PINO]
 Order   = [:type, :function]
 ```

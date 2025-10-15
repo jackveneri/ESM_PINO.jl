@@ -1,4 +1,3 @@
-using Lux, Random, QG3, NNlib
 """
     SphericalConv(hidden_channels::Int, ggsh::GaussianGridtoSHTransform, shgg::SHtoGaussianGridTransform; modes::Int=ggsh.output_size[1], zsk::Bool=false)
 
@@ -50,7 +49,7 @@ y, st = layer(x, ps, st)
 using Zygote
 gr = Zygote.gradient(ps -> sum(layer(x, ps, st)[1]), ps)
 """
-struct SphericalConv{G,S} <: Lux.AbstractLuxLayer 
+struct SphericalConv{G,S} <: ESM_PINO.AbstractSphericalConv 
     hidden_channels::Int
     modes::Int
     ggsh::G  # GaussianGridtoSHTransform
@@ -144,7 +143,7 @@ function SphericalConv(
     SphericalConv(hidden_channels, ggsh, shgg, corrected_modes, zsk=zsk)
 end
 
-function Lux.initialparameters(rng::AbstractRNG, layer::SphericalConv{G,S}) where {G,S}
+function Lux.initialparameters(rng::Random.AbstractRNG, layer::SphericalConv{G,S}) where {G,S}
     init_std = typeof(layer.ggsh).parameters[1](sqrt(2 / layer.hidden_channels))
     # Initialize 2D weights for spatial pattern (L × M)
     if layer.zsk == true
@@ -155,7 +154,7 @@ function Lux.initialparameters(rng::AbstractRNG, layer::SphericalConv{G,S}) wher
     return (weight=weight,)
 end
 
-Lux.initialstates(rng::AbstractRNG, layer::SphericalConv) = NamedTuple()
+Lux.initialstates(rng::Random.AbstractRNG, layer::SphericalConv) = NamedTuple()
 
 function (layer::SphericalConv{G,S})(x::AbstractArray{T,4}, ps::NamedTuple, st::NamedTuple) where {G,S,T} 
     @assert T == typeof(layer.ggsh).parameters[1] "Input type $T does not match model parameter type $(typeof(layer.ggsh).parameters[1]))"

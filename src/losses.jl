@@ -99,11 +99,13 @@ Create a struct to hold parameters for spectral physics loss.
 
 # Fields
 - `ν`: Viscosity (scalar)
-- `Δt`: Time dimension array index spacing from original array (scalar)
 - `L`: Domain size (scalar)
+- `N_t`: Number of time steps (integer)
+- `t_max`: Maximum time (scalar)
+- `t_min`: Minimum time (scalar)
+- `Δt`: Time step size (scalar)
 - `x_σ`: Standard deviation for normalization (scalar)
 - `x_μ`: Mean for normalization (scalar)
-- `t_step_length`: Time step length (scalar)
 """
 struct SpectralPhysicsLossParameters
     ν::Float64
@@ -159,10 +161,7 @@ Create a struct to hold parameters for finite difference physics loss.
 
 # Fields
 - `ν`: Viscosity (scalar)
-- `Δt`: time dimension array spacing of original dataset array (integer)
 - 't_step_length`: Time step length (scalar)
-- `x_σ`: Standard deviation from normalization (scalar)
-- `x_μ`: Mean from normalization (scalar)
 - `M1_gpu`: Second derivative FD matrix (GPU array)
 - `M2_gpu`: First derivative FD matrix (GPU array)
 """
@@ -326,5 +325,26 @@ function create_autoregressive_loss_function(params::FDPhysicsLossParameters)
     )
     return (loss, (st), ())
     end 
+    return loss_function
+end
+"""
+    select_loss_function()
+Helper function to pass a valid loss function to Training.single_train_step.
+Selects a loss function based on the provided physics-informed loss function, in the standard workflow generated with create_physics_loss.
+
+# Arguments
+- `PI_loss`: Physics-informed loss function (default is a zero loss function)
+"""
+function select_loss_function(PI_loss::Function=create_physics_loss(nothing); subsampling::Int=1, α::Float32=0.5f0)
+    function loss_function(model::Lux.AbstractLuxLayer, ps::NamedTuple, st::NamedTuple, (u_t1, target_data)::Tuple{AbstractArray, AbstractArray}; α=α)
+        u_net = StatefulLuxLayer{true}(model, ps, st)
+        data_loss = mse_loss_function(u_net, target_data, u_t1; subsampling=subsampling)
+        physics_loss = PI_loss(u_net, u_t1)
+        loss = (1 - α) * physics_loss + α * data_loss
+        return (loss,
+            (st),
+            (;physics_loss, data_loss)
+        )
+    end
     return loss_function
 end

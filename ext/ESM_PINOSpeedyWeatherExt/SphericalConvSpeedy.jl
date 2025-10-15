@@ -4,7 +4,7 @@
 #Pkg.add(url="https://github.com/SpeedyWeather/SpeedyWeather.jl", rev="main")
 
 
-struct SphericalConv{T<:AbstractFloat} <: Lux.AbstractLuxLayer
+struct SphericalConv{T<:AbstractFloat} <: ESM_PINO.AbstractSphericalConv
     NF::Type{T}
     resolution::Int
     hidden_channels::Int

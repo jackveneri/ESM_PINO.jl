@@ -6,8 +6,8 @@ using SpeedyWeather.LowerTriangularArrays
 using SpeedyWeather.SpeedyTransforms
 using Lux, Random
 
-include("gaussian_grid_utils.jl")
-include("SphericalConvSpeedy.jl")
+include("ESM_PINOSpeedyWeatherExt/gaussian_grid_utils.jl")
+include("ESM_PINOSpeedyWeatherExt/SphericalConvSpeedy.jl")
 
 export SphericalConv
 end
