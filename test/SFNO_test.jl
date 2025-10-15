@@ -50,7 +50,7 @@ const SFNO = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext).SFNO
             
             @testset "Initialization" begin
                 # Test construction with parameter object
-                layer = SFNO(qg3ppars; 
+                layer = SFNO(qg3ppars; in_channels=hidden_channels, out_channels=hidden_channels,
                                     modes=modes, batch_size=batch_size, gpu=use_gpu, zsk=use_zsk, positional_embedding=positional_embedding)
                 
                 # Test layer properties
@@ -74,7 +74,7 @@ const SFNO = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext).SFNO
                 # Test direct construction with transforms
                 ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, hidden_channels; N_batch=batch_size)
                 shgg = QG3.SHtoGaussianGridTransform(qg3ppars, hidden_channels; N_batch=batch_size)
-                layer_direct = SFNO(ggsh, shgg, modes=modes, zsk=use_zsk, positional_embedding=positional_embedding)
+                layer_direct = SFNO(ggsh, shgg,in_channels=hidden_channels, out_channels=hidden_channels, modes=modes, zsk=use_zsk, positional_embedding=positional_embedding)
                 
                 ps_direct, st_direct = Lux.setup(rng, layer_direct)
                  # Verify parameters exist and have correct structure
@@ -91,7 +91,7 @@ const SFNO = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext).SFNO
             end
             
             @testset "Forward Pass - $config_name" begin
-                layer = SFNO(qg3ppars; 
+                layer = SFNO(qg3ppars; in_channels=hidden_channels, out_channels=hidden_channels, 
                                     modes=modes, batch_size=batch_size, gpu=use_gpu, zsk=use_zsk, positional_embedding=positional_embedding)
                 ps, st = Lux.setup(rng, layer)
                 
@@ -129,7 +129,7 @@ const SFNO = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext).SFNO
             end
             
             @testset "Backward Pass - Gradient Correctness - $config_name" begin
-                layer = SFNO(qg3ppars; 
+                layer = SFNO(qg3ppars; in_channels=hidden_channels, out_channels=hidden_channels,
                                     modes=modes, batch_size=batch_size, gpu=use_gpu, zsk=use_zsk, positional_embedding=positional_embedding)
                 ps, st = Lux.setup(rng, layer)
                 
