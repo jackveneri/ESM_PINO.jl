@@ -32,7 +32,7 @@ struct SphericalKernel{P,F} <: Lux.AbstractLuxLayer
 end
 
 function SphericalKernel(hidden_channels::Int, pars::QG3.QG3ModelParameters, activation=NNlib.gelu; modes::Int=pars.L, batch_size::Int=1, gpu::Bool=true, zsk::Bool=false) 
-    conv = Conv((1,1), hidden_channels => hidden_channels, pad=0, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32)
+    conv = Lux.Conv((1,1), hidden_channels => hidden_channels, pad=0, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32)
     spherical = SphericalConv(pars, hidden_channels; modes=modes, batch_size=batch_size, gpu=gpu, zsk=zsk)
     return SphericalKernel(conv, spherical, activation)
 end
@@ -58,7 +58,7 @@ Construct a SphericalKernel layer using precomputed transforms.
 - `activation::F`: Elementwise activation function
 """
 function SphericalKernel(hidden_channels::Int, ggsh::QG3.GaussianGridtoSHTransform, shgg::QG3.SHtoGaussianGridTransform, activation=NNlib.gelu; modes::Int=ggsh.output_size[1], zsk::Bool=false)
-    conv = Conv((1,1), hidden_channels => hidden_channels, pad=0, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32)
+    conv = Lux.Conv((1,1), hidden_channels => hidden_channels, pad=0, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32)
     spherical = SphericalConv(hidden_channels, ggsh, shgg, modes, zsk=zsk)
     return SphericalKernel(conv, spherical, activation)
 end
