@@ -50,7 +50,7 @@ const SphericalKernel = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext).SphericalK
             
             @testset "Initialization" begin
                 # Test construction with parameter object
-                layer = SphericalKernel(hidden_channels,qg3ppars; 
+                layer = SphericalKernel(hidden_channels, qg3ppars; 
                                     modes=modes, batch_size=batch_size, gpu=use_gpu, zsk=use_zsk)
                 
                 # Test layer properties
