@@ -67,9 +67,9 @@ end
     normalize_data(data)
 
 Normalize an array to zero mean and unit variance.
-#Arguments
+# Arguments
 -`data`: Input array.
-#Returns
+# Returns
 -`(normalized_data, μ, σ):` A tuple containing:
     normalized_data: The normalized array.
     μ: The mean of the original data.

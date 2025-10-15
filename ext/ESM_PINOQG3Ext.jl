@@ -1,8 +1,8 @@
 module ESM_PINOQG3Ext
 
 using ESM_PINO
-import QG3
-import Lux, Random, Zygote, NNlib
+using QG3
+using Lux, Random, Zygote, NNlib
  
 include("ESM_PINOQG3Ext/SphericalConvTypeSpec.jl")
 include("ESM_PINOQG3Ext/SFNO_components.jl")

@@ -11,7 +11,7 @@ LuxCore.parameterlength(::NoOpLayer) = 0
 A Fourier Neural Operator (FNO) container that optionally includes positional embeddings,
 lifting and projection convolutions, and a stack of FNO blocks.
 
-#Arguments
+# Arguments
 -`in_channels::Int`: Number of input channels.
 -`out_channels::Int`: Number of output channels.
 -`hidden_channels::Int=32`: Number of hidden channels used inside FNO blocks.
@@ -26,13 +26,13 @@ lifting and projection convolutions, and a stack of FNO blocks.
 "grid1D", "no_grid1D" => 1D variants (GridEmbedding1D or NoOpLayer)
 "grid3D", "no_grid3D" => 3D variants (GridEmbedding3D or NoOpLayer)
 
-#Fields
+# Fields
 -`embedding`: Positional embedding layer (a GridEmbeddingND or NoOpLayer).
 -`lifting`: Lifting convolution(s) mapping in_channels -> hidden_channels.
 -`fno_blocks`: Repeated stack of FNO blocks appropriate to dimensionality.
 -`projection`: Projection convolution(s) mapping hidden_channels -> out_channels.
 
-#Examples
+# Examples
 
 Example (2D data with grid embedding):
 ```julia

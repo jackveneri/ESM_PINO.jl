@@ -93,7 +93,7 @@ y, st = model1(x, ps, st)
 using Zygote
 gr = Zygote.gradient(ps -> sum(model1(x, ps, st)[1]), ps)
 """
-struct SFNO <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :sfno_blocks, :projection)}
+struct SFNO <: ESM_PINO.AbstractSFNO
     embedding ::Union{Lux.NoOpLayer, GridEmbedding2D}
     lifting ::Lux.AbstractLuxLayer
     sfno_blocks ::Lux.AbstractLuxLayer
@@ -106,8 +106,8 @@ end
 function SFNO(pars::QG3.QG3ModelParameters;
     batch_size::Int=1,
     modes::Int=pars.L,
-    in_channels::Int,
-    out_channels::Int,
+    in_channels::Int=3,
+    out_channels::Int=3,
     hidden_channels::Int=32,
     n_layers::Int=4,
     lifting_channel_ratio::Int=2,
@@ -150,8 +150,8 @@ function SFNO(
     ggsh::QG3.GaussianGridtoSHTransform,
     shgg::QG3.SHtoGaussianGridTransform;
     modes::Int=ggsh.output_size[1],
-    in_channels::Int,
-    out_channels::Int,
+    in_channels::Int=3,
+    out_channels::Int=3,
     hidden_channels::Int=32,
     n_layers::Int=4,
     lifting_channel_ratio::Int=2,
