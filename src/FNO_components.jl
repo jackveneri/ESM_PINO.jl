@@ -9,7 +9,7 @@ Expects input in (spatial..., channel, batch) format.
 - `modes`: Tuple specifying number of low-frequency modes to retain along each spatial dimension
 - `T`: Data type for weights (default: ComplexF32)
 - `N`: Number of spatial dimensions (inferred from length of `modes`)
-#Fields
+# Fields
 - `in_channels::Int`: Number of input channels
 - `out_channels::Int`: Number of output channels
 - `modes::NTuple{N,Int}`: Number of low-frequency modes to retain along each spatial dimension
