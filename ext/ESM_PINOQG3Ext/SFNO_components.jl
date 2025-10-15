@@ -25,7 +25,7 @@ Expects input in (spatial..., channel, batch) format.
 - Outputs from both branches are summed and passed through the activation
 - Useful for mixing local (spatial) and global (spectral) information
 """
-struct SphericalKernel{P,F} <: Lux.AbstractLuxLayer
+struct SphericalKernel{P,F} <: ESM_PINO.AbstractSphericalKernel
     spatial_conv::P  # 1x1 convolution
     spherical_conv::SphericalConv
     activation::F    # Activation function
@@ -144,7 +144,7 @@ Expects input in (spatial..., channel, batch) format.
 
 
 """
-struct SFNO_Block <: Lux.AbstractLuxLayer
+struct SFNO_Block <: ESM_PINO.AbstractSFNOBlock
     spherical_kernel :: SphericalKernel
     channel_mlp :: ChannelMLP
     channels :: Int

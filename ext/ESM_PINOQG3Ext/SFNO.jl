@@ -93,7 +93,7 @@ y, st = model1(x, ps, st)
 using Zygote
 gr = Zygote.gradient(ps -> sum(model1(x, ps, st)[1]), ps)
 """
-struct SFNO <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :sfno_blocks, :projection)}
+struct SFNO <: ESM_PINO.AbstractSFNO
     embedding ::Union{Lux.NoOpLayer, GridEmbedding2D}
     lifting ::Lux.AbstractLuxLayer
     sfno_blocks ::Lux.AbstractLuxLayer
