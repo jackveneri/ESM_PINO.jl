@@ -12,23 +12,24 @@ Load the corresponding extension to use a specific implementation.
 abstract type AbstractSphericalConv <: Lux.AbstractLuxLayer end
 
 """
-    SphericalConv{T}
-
+$(TYPEDSIGNATURES)
 Empty layer to test extension documentation.
 """
 struct SphericalConv{T} <: AbstractSphericalConv
-    transform::T
+    hidden_channels::Int
+    modes::Int
+    plan :: T
+    zsk::Bool
 end
-
 # Default behavior: throw or warn if used without an extension
-Lux.initialparameters(rng::AbstractRNG, layer::SphericalConv) =
+Lux.initialparameters(rng::AbstractRNG, layer::SphericalConv{T}) where T =
     error("No implementation of `initialparameters` for this layer. \
            Load the appropriate extension (e.g., ESM_PINOQG3Ext or ESM_PINOSpeedyWeatherExt).")
 
-           Lux.initialstates(rng::AbstractRNG, layer::SphericalConv) =
+           Lux.initialstates(rng::AbstractRNG, layer::SphericalConv{T}) where T =
     error("No implementation of `initialstates` for this layer. \
            Load the appropriate extension (e.g., ESM_PINOQG3Ext or ESM_PINOSpeedyWeatherExt).")
 
-Lux.apply(layer::SphericalConv, ps, st, x) =
+Lux.apply(layer::SphericalConv{T}, ps, st, x) where T =
     error("No `apply` method defined for this layer type. \
            Check if an extension providing it is loaded.")

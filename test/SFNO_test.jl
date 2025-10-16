@@ -1,6 +1,6 @@
 using Lux, Random, Test, QG3
 using LuxTestUtils, JLD2
-const SFNO = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext).SFNO
+#const SFNO = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext).SFNO
 
 @testset "SFNO Comprehensive Tests" begin
     

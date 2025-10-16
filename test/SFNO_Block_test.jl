@@ -1,7 +1,7 @@
 using Lux, Random, Test, QG3
 using LuxTestUtils, JLD2
-const SFNO_Block = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext).SFNO_Block
-
+#const SFNO_Block = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext).SFNO_Block
+const SFNO_Block = ESM_PINO.SFNO_Block
 @testset "SFNO_Block Comprehensive Tests" begin
     
     rng = Random.default_rng()
