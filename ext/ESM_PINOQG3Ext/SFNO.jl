@@ -4,8 +4,7 @@
 Spherical Fourier Neural Operator (SFNO) layer combining positional embeddings, spectral kernels, and channel MLPs.
 
 This layer implements the SFNO architecture on the sphere, optionally using Zonal Symmetric Kernels (ZSK)
-following the approach described in **Spherical Fourier Neural Operators: Learning Stable Dynamics on the Sphere**,
-https://arxiv.org/abs/2204.06408.
+following the approach described in [**Spherical Fourier Neural Operators: Learning Stable Dynamics on the Sphere**](https://arxiv.org/abs/2204.06408).
 
 # Arguments (primary constructor with `pars::QG3ModelParameters`)
 - `pars::QG3ModelParameters`: Model parameters defining the spherical grid and maximum spherical harmonic degree `L`.
@@ -92,6 +91,7 @@ y, st = model1(x, ps, st)
 # Compute gradients
 using Zygote
 gr = Zygote.gradient(ps -> sum(model1(x, ps, st)[1]), ps)
+```
 """
 struct SFNO <: ESM_PINO.AbstractSFNO
     embedding ::Union{Lux.NoOpLayer, GridEmbedding2D}
