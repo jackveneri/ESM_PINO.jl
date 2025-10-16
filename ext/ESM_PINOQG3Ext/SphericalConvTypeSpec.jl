@@ -1,6 +1,5 @@
 """
-    SphericalConv(hidden_channels::Int, ggsh::GaussianGridtoSHTransform, shgg::SHtoGaussianGridTransform; modes::Int=ggsh.output_size[1], zsk::Bool=false)
-
+$(TYPEDSIGNATURES)
 Spherical convolution layer for functions on the sphere using spherical harmonics.  
 Transforms data from Gaussian grid → spherical harmonics, applies learned weights, and transforms back.
 
@@ -50,32 +49,25 @@ using Zygote
 gr = Zygote.gradient(ps -> sum(layer(x, ps, st)[1]), ps)
 ```
 """
-struct SphericalConv{G,S} <: ESM_PINO.AbstractSphericalConv 
-    hidden_channels::Int
-    modes::Int
-    ggsh::G  # GaussianGridtoSHTransform
-    shgg::S  # SHtoGaussianGridTransform
-    zsk::Bool  # Whether to use Zonal Symmetric Kernels (ZSK)
-    # Inner constructor to enforce modes ≤ pars.L
-    function SphericalConv(
-            hidden_channels::Int,
-            ggsh::QG3.GaussianGridtoSHTransform,
-            shgg::QG3.SHtoGaussianGridTransform,
-            modes::Int = ggsh.output_size[1];
-            zsk::Bool = false
-        )
-        # Correct modes if necessary
-        corrected_modes = min(modes, ggsh.output_size[1])
-        if modes != corrected_modes
-            @warn "modes ($modes) exceeds ggsh.output_size[1] ($(ggsh.output_size[1])). Setting modes = $(ggsh.output_size[1])."
-        end
-        # Create the struct with the corrected value
-        new{QG3.GaussianGridtoSHTransform,QG3.SHtoGaussianGridTransform}(hidden_channels, corrected_modes, ggsh, shgg, zsk)
+function ESM_PINO.SphericalConv(
+        hidden_channels::Int,
+        ggsh::QG3.GaussianGridtoSHTransform,
+        shgg::QG3.SHtoGaussianGridTransform,
+        modes::Int = ggsh.output_size[1];
+        zsk::Bool = false
+    )
+    plan = ESM_PINOQG3(ggsh, shgg)
+    # Correct modes if necessary
+    corrected_modes = min(modes, ggsh.output_size[1])
+    if modes != corrected_modes
+        @warn "modes ($modes) exceeds ggsh.output_size[1] ($(ggsh.output_size[1])). Setting modes = $(ggsh.output_size[1])."
     end
+    # Create the struct with the corrected value
+    ESM_PINO.SphericalConv{ESM_PINOQG3}(hidden_channels, corrected_modes, plan, zsk)
 end
-"""
-    SphericalConv(pars::QG3.QG3ModelParameters{T}, hidden_channels::Int; modes::Int=pars.L, batch_size::Int=1, gpu::Bool=true, zsk::Bool=false) where T
 
+"""
+$(TYPEDSIGNATURES)
 Construct a spherical convolution layer using precomputed model parameters.
 
 # Arguments
@@ -120,7 +112,7 @@ using Zygote
 gr = Zygote.gradient(ps -> sum(layer(x, ps, st)[1]), ps)
 ```
 """
-function SphericalConv(
+function ESM_PINO.SphericalConv(
         pars::QG3.QG3ModelParameters{T},
         hidden_channels::Int;
         modes::Int = pars.L,
@@ -142,31 +134,45 @@ function SphericalConv(
 
     ggsh = QG3.GaussianGridtoSHTransform(pars, hidden_channels; N_batch=batch_size)
     shgg = QG3.SHtoGaussianGridTransform(pars, hidden_channels; N_batch=batch_size)
-    SphericalConv(hidden_channels, ggsh, shgg, corrected_modes, zsk=zsk)
+    plan = ESM_PINOQG3(ggsh, shgg)
+    ESM_PINO.SphericalConv{ESM_PINOQG3}(hidden_channels, corrected_modes, plan, zsk)
 end
 
-function Lux.initialparameters(rng::Random.AbstractRNG, layer::SphericalConv{G,S}) where {G,S}
-    init_std = typeof(layer.ggsh).parameters[1](sqrt(2 / layer.hidden_channels))
+function Lux.initialparameters(rng::Random.AbstractRNG, layer::ESM_PINO.SphericalConv{ESM_PINOQG3})
+    init_std = typeof(layer.plan.ggsh).parameters[1](sqrt(2 / layer.hidden_channels))
     # Initialize 2D weights for spatial pattern (L × M)
     if layer.zsk == true
-        weight = init_std * randn(rng, typeof(layer.ggsh).parameters[1], 1, layer.modes, 1, 1)
+        weight = init_std * randn(rng, typeof(layer.plan.ggsh).parameters[1], 1, layer.modes, 1, 1)
     else
-        weight = init_std * randn(rng, typeof(layer.ggsh).parameters[1], 1, layer.modes, 2 * layer.modes - 1, 1)
+        weight = init_std * randn(rng, typeof(layer.plan.ggsh).parameters[1], 1, layer.modes, 2 * layer.modes - 1, 1)
     end
     return (weight=weight,)
 end
 
-Lux.initialstates(rng::Random.AbstractRNG, layer::SphericalConv) = NamedTuple()
+Lux.initialstates(rng::Random.AbstractRNG, layer::ESM_PINO.SphericalConv{ESM_PINOQG3}) = NamedTuple()
 
-function (layer::SphericalConv{G,S})(x::AbstractArray{T,4}, ps::NamedTuple, st::NamedTuple) where {G,S,T} 
-    @assert T == typeof(layer.ggsh).parameters[1] "Input type $T does not match model parameter type $(typeof(layer.ggsh).parameters[1]))"
+function (layer::ESM_PINO.SphericalConv{ESM_PINOQG3})(x::AbstractArray{T,4}, ps::NamedTuple, st::NamedTuple) where T
+    @assert T == typeof(layer.plan.ggsh).parameters[1] "Input type $T does not match model parameter type $(typeof(layer.plan.ggsh).parameters[1]))"
     @views begin
     x_perm = permutedims(x, (3, 1, 2, 4))  # [channels, lat, lon, batch]
-    x_tr = QG3.transform_SH(x_perm, layer.ggsh)
+    x_tr = QG3.transform_SH(x_perm, layer.plan.ggsh)
     # Type-stable element-wise multiplication with broadcast
     x_p = ps.weight .* x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]  
     x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(x_tr, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
-    x_out = QG3.transform_grid(x_pad, layer.shgg)
+    x_out = QG3.transform_grid(x_pad, layer.plan.shgg)
+    x_out_perm = permutedims(x_out, (2, 3, 1, 4)) # [lat, lon, channels, batch]
+    end  
+    return x_out_perm, st
+end
+function Lux.apply(layer::ESM_PINO.SphericalConv{ESM_PINOQG3}, x::AbstractArray{T,4}, ps::NamedTuple, st::NamedTuple) where T
+    @assert T == typeof(layer.plan.ggsh).parameters[1] "Input type $T does not match model parameter type $(typeof(layer.plan.ggsh).parameters[1]))"
+    @views begin
+    x_perm = permutedims(x, (3, 1, 2, 4))  # [channels, lat, lon, batch]
+    x_tr = QG3.transform_SH(x_perm, layer.plan.ggsh)
+    # Type-stable element-wise multiplication with broadcast
+    x_p = ps.weight .* x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]  
+    x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(x_tr, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
+    x_out = QG3.transform_grid(x_pad, layer.plan.shgg)
     x_out_perm = permutedims(x_out, (2, 3, 1, 4)) # [lat, lon, channels, batch]
     end  
     return x_out_perm, st

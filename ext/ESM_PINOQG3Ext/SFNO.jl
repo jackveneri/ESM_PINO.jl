@@ -1,12 +1,11 @@
 """
-    SFNO
-
+$(TYPEDSIGNATURES)
 Spherical Fourier Neural Operator (SFNO) layer combining positional embeddings, spectral kernels, and channel MLPs.
 
 This layer implements the SFNO architecture on the sphere, optionally using Zonal Symmetric Kernels (ZSK)
 following the approach described in [**Spherical Fourier Neural Operators: Learning Stable Dynamics on the Sphere**](https://arxiv.org/abs/2204.06408).
 
-# Arguments (primary constructor with `pars::QG3ModelParameters`)
+# Arguments 
 - `pars::QG3ModelParameters`: Model parameters defining the spherical grid and maximum spherical harmonic degree `L`.
 - `batch_size::Int=1`: Number of samples in a batch.
 - `modes::Int=pars.L`: Maximum number of spherical harmonic modes to use.
@@ -24,10 +23,6 @@ following the approach described in [**Spherical Fourier Neural Operators: Learn
 - `gpu::Bool=true`: If true, computations are performed on GPU.
 - `zsk::Bool=false`: If true, use Zonal Symmetric Kernels, enforcing longitudinal symmetry.
 
-# Arguments (secondary constructor with `ggsh` and `shgg`)
-- `ggsh::QG3.GaussianGridtoSHTransform`: Precomputed grid-to-SH transform.
-- `shgg::QG3.SHtoGaussianGridTransform`: Precomputed SH-to-grid transform.
-- Other keyword arguments are the same as for the primary constructor, except modes which default is set to `ggsh.output_size[1]`. Also, no need to specify `batch_size` or `gpu` as these are handled in the transforms.
 
 # Returns
 - `SFNO`: A Lux-compatible container layer.
@@ -64,22 +59,6 @@ model1 = SFNO(qg3ppars;
     gpu=false
 )
 
-# Construct SFNO layer using secondary constructor
-ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, 32, N_batch=size(x,4))
-shgg = QG3.SHtoGaussianGridTransform(qg3ppars, 32, N_batch=size(x,4))
-model2 = SFNO(ggsh, shgg;
-    modes=15,
-    in_channels=3,
-    out_channels=3,
-    hidden_channels=32,
-    n_layers=4,
-    lifting_channel_ratio=2,
-    projection_channel_ratio=2,
-    channel_mlp_expansion=2.0,
-    positional_embedding="no_grid",
-    outer_skip=true,
-    zsk=true
-)
 
 # Setup parameters and state
 rng = Random.default_rng(0)
@@ -93,17 +72,7 @@ using Zygote
 gr = Zygote.gradient(ps -> sum(model1(x, ps, st)[1]), ps)
 ```
 """
-struct SFNO <: ESM_PINO.AbstractSFNO
-    embedding ::Union{Lux.NoOpLayer, GridEmbedding2D}
-    lifting ::Lux.AbstractLuxLayer
-    sfno_blocks ::Lux.AbstractLuxLayer
-    projection ::Lux.AbstractLuxLayer
-    outer_skip :: Bool
-    lifting_channel_ratio::Int
-    projection_channel_ratio::Int
-end
-
-function SFNO(pars::QG3.QG3ModelParameters;
+function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
     batch_size::Int=1,
     modes::Int=pars.L,
     in_channels::Int=3,
@@ -138,15 +107,75 @@ function SFNO(pars::QG3.QG3ModelParameters;
             Lux.Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
         )
         
-        sfno_blocks = Lux.RepeatedLayer(SFNO_Block(hidden_channels, pars; modes=modes, batch_size=batch_size, expansion_factor=channel_mlp_expansion, activation=activation, skip=inner_skip, gpu=gpu, zsk=zsk), repeats=Val(n_layers))
+        sfno_blocks = Lux.RepeatedLayer(ESM_PINO.SFNO_Block(hidden_channels, pars; modes=modes, batch_size=batch_size, expansion_factor=channel_mlp_expansion, activation=activation, skip=inner_skip, gpu=gpu, zsk=zsk), repeats=Val(n_layers))
     
     else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'no_grid'."))
     end
-    return SFNO(embedding, lifting, sfno_blocks, projection, outer_skip, lifting_channel_ratio, projection_channel_ratio)
+    return ESM_PINO.SFNO(embedding, lifting, sfno_blocks, projection, outer_skip, lifting_channel_ratio, projection_channel_ratio)
 end
+"""
+$(TYPEDSIGNATURES)
+Spherical Fourier Neural Operator (SFNO) layer combining positional embeddings, spectral kernels, and channel MLPs.
 
-function SFNO(
+This layer implements the SFNO architecture on the sphere, optionally using Zonal Symmetric Kernels (ZSK)
+following the approach described in [**Spherical Fourier Neural Operators: Learning Stable Dynamics on the Sphere**](https://arxiv.org/abs/2204.06408).
+
+# Arguments 
+- `ggsh::QG3.GaussianGridtoSHTransform`: Precomputed grid-to-SH transform.
+- `shgg::QG3.SHtoGaussianGridTransform`: Precomputed SH-to-grid transform.
+- Other keyword arguments are the same as for the primary constructor, except modes which default is set to `ggsh.output_size[1]`. Also, no need to specify `batch_size` or `gpu` as these are handled in the transforms.
+
+# Returns
+- `SFNO`: A Lux-compatible container layer.
+
+# Details
+- Constructs lifting, SFNO blocks, and projection layers compatible with Lux.jl.
+- Positional embeddings are appended if `positional_embedding="grid"`.
+- Supports both CPU and GPU execution.
+- Zonal Symmetric Kernels (ZSK) reduce the number of parameters and improve stability on spherical domains.
+
+# Example
+```julia
+using Lux, QG3, Random, NNlib, LuxCUDA
+
+# Load precomputed QG3 parameters
+qg3ppars = QG3.load_precomputed_params()[2]
+
+# Input: [lat, lon, channels, batch]
+x = rand(Float32, 32, 64, 3, 10)
+
+
+# Construct SFNO layer using secondary constructor
+ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, 32, N_batch=size(x,4))
+shgg = QG3.SHtoGaussianGridTransform(qg3ppars, 32, N_batch=size(x,4))
+model2 = SFNO(ggsh, shgg;
+    modes=15,
+    in_channels=3,
+    out_channels=3,
+    hidden_channels=32,
+    n_layers=4,
+    lifting_channel_ratio=2,
+    projection_channel_ratio=2,
+    channel_mlp_expansion=2.0,
+    positional_embedding="no_grid",
+    outer_skip=true,
+    zsk=true
+)
+
+# Setup parameters and state
+rng = Random.default_rng(0)
+ps, st = Lux.setup(rng, model2)
+
+# Forward pass
+y, st = model2(x, ps, st)
+
+# Compute gradients
+using Zygote
+gr = Zygote.gradient(ps -> sum(model2(x, ps, st)[1]), ps)
+```
+"""
+function ESM_PINO.SFNO(
     ggsh::QG3.GaussianGridtoSHTransform,
     shgg::QG3.SHtoGaussianGridTransform;
     modes::Int=ggsh.output_size[1],
@@ -181,7 +210,7 @@ function SFNO(
             Lux.Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
         )
         
-        sfno_blocks = Lux.RepeatedLayer(SFNO_Block(hidden_channels, ggsh, shgg; modes=modes, expansion_factor=channel_mlp_expansion, activation=activation, skip=inner_skip, zsk=zsk), repeats=Val(n_layers))
+        sfno_blocks = Lux.RepeatedLayer(ESM_PINO.SFNO_Block(hidden_channels, ggsh, shgg; modes=modes, expansion_factor=channel_mlp_expansion, activation=activation, skip=inner_skip, zsk=zsk), repeats=Val(n_layers))
     
     else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'no_grid'."))
@@ -189,7 +218,7 @@ function SFNO(
     return SFNO(embedding, lifting, sfno_blocks, projection, outer_skip, lifting_channel_ratio, projection_channel_ratio) 
 end
 
-function Lux.initialparameters(rng::Random.AbstractRNG, layer::SFNO)
+function Lux.initialparameters(rng::Random.AbstractRNG, layer::ESM_PINO.SFNO{F,S,ESM_PINOQG3}) where {F,S}
     ps_embedding = isnothing(layer.embedding) ? NamedTuple() : Lux.initialparameters(rng, layer.embedding)
     ps_lifting = Lux.initialparameters(rng, layer.lifting)
     ps_sfno_blocks = Lux.initialparameters(rng, layer.sfno_blocks)
@@ -202,7 +231,7 @@ function Lux.initialparameters(rng::Random.AbstractRNG, layer::SFNO)
     )
 end
 
-function Lux.initialstates(rng::Random.AbstractRNG, layer::SFNO)
+function Lux.initialstates(rng::Random.AbstractRNG, layer::ESM_PINO.SFNO{F,S,ESM_PINOQG3}) where {F,S}
     st_embedding = isnothing(layer.embedding) ? NamedTuple() : Lux.initialstates(rng, layer.embedding)
     st_lifting = Lux.initialstates(rng, layer.lifting)
     st_sfno_blocks = Lux.initialstates(rng, layer.sfno_blocks)
@@ -215,7 +244,26 @@ function Lux.initialstates(rng::Random.AbstractRNG, layer::SFNO)
     )
 end
 
-function (layer::SFNO)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
+function (layer::ESM_PINO.SFNO{F,S,ESM_PINOQG3})(x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {F,S}
+    if !isnothing(layer.embedding)
+        x, st_embedding = layer.embedding(x, ps.embedding, st.embedding)
+    else
+        st_embedding = st.embedding
+    end
+    
+    x, st_lifting = layer.lifting(x, ps.lifting, st.lifting)
+    residual = x
+    x, st_sfno_blocks = layer.sfno_blocks(x, ps.sfno_blocks, st.sfno_blocks)
+    if layer.outer_skip
+        x_out = x + residual
+    else
+        x_out = x
+    end
+    x, st_projection = layer.projection(x_out, ps.projection, st.projection)
+    
+    return x, (embedding=st_embedding, lifting=st_lifting, sfno_blocks=st_sfno_blocks, projection=st_projection)
+end
+function Lux.apply(layer::ESM_PINO.SFNO{F,S,ESM_PINOQG3}, x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {F,S}
     if !isnothing(layer.embedding)
         x, st_embedding = layer.embedding(x, ps.embedding, st.embedding)
     else

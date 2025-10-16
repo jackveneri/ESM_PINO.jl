@@ -1,7 +1,7 @@
 using Lux, Random, Test, QG3
 using LuxTestUtils, JLD2
-const SphericalKernel = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext).SphericalKernel
-
+#const SphericalKernel = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext).SphericalKernel
+const SphericalKernel = ESM_PINO.SphericalKernel
 @testset "SphericalKernel Comprehensive Tests" begin
     
     rng = Random.default_rng()

@@ -1,7 +1,7 @@
 using Lux, Random, Test, QG3
 using LuxTestUtils, JLD2
-const SphericalConv = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext).SphericalConv
-
+#const SphericalConv = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext).SphericalConv
+const SphericalConv = ESM_PINO.SphericalConv
 @testset "SphericalConv Comprehensive Tests" begin
     
     rng = Random.default_rng()
