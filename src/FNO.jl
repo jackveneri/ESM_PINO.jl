@@ -12,25 +12,25 @@ A Fourier Neural Operator (FNO) container that optionally includes positional em
 lifting and projection convolutions, and a stack of FNO blocks.
 
 # Arguments
--`in_channels::Int`: Number of input channels.
--`out_channels::Int`: Number of output channels.
--`hidden_channels::Int=32`: Number of hidden channels used inside FNO blocks.
--`n_modes::NTuple{N,Int}=(16, 16)`: Number of retained Fourier modes per spatial dimension.
--`n_layers::Int=4`: Number of FNO blocks to stack.
--`lifting_channel_ratio::Int=2`: Channel expansion ratio used in the lifting layer.
--`projection_channel_ratio::Int=2`: Channel expansion ratio used in the projection layer.
--`channel_mlp_expansion::Number=2`: Expansion factor inside ChannelMLP of each block.
--`activation=NNlib.gelu`: Activation function used in conv layers.
--`positional_embedding`::AbstractString="grid": Choice of positional embedding:
+- `in_channels::Int`: Number of input channels.
+- `out_channels::Int`: Number of output channels.
+- `hidden_channels::Int=32`: Number of hidden channels used inside FNO blocks.
+- `n_modes::NTuple{N,Int}=(16, 16)`: Number of retained Fourier modes per spatial dimension.
+- `n_layers::Int=4`: Number of FNO blocks to stack.
+- `lifting_channel_ratio::Int=2`: Channel expansion ratio used in the lifting layer.
+- `projection_channel_ratio::Int=2`: Channel expansion ratio used in the projection layer.
+- `channel_mlp_expansion::Number=2`: Expansion factor inside ChannelMLP of each block.
+- `activation=NNlib.gelu`: Activation function used in conv layers.
+- `positional_embedding`::AbstractString="grid": Choice of positional embedding:
 "grid", "no_grid" => 2D variants (GridEmbedding2D or NoOpLayer)
 "grid1D", "no_grid1D" => 1D variants (GridEmbedding1D or NoOpLayer)
 "grid3D", "no_grid3D" => 3D variants (GridEmbedding3D or NoOpLayer)
 
 # Fields
--`embedding`: Positional embedding layer (a GridEmbeddingND or NoOpLayer).
--`lifting`: Lifting convolution(s) mapping in_channels -> hidden_channels.
--`fno_blocks`: Repeated stack of FNO blocks appropriate to dimensionality.
--`projection`: Projection convolution(s) mapping hidden_channels -> out_channels.
+- `embedding`: Positional embedding layer (a GridEmbeddingND or NoOpLayer).
+- `lifting`: Lifting convolution(s) mapping in_channels -> hidden_channels.
+- `fno_blocks`: Repeated stack of FNO blocks appropriate to dimensionality.
+- `projection`: Projection convolution(s) mapping hidden_channels -> out_channels.
 
 # Examples
 

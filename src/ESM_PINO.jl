@@ -16,5 +16,5 @@ include("Spherical_Kernel.jl")
 include("SFNO_Block.jl")
 include("SFNO.jl")
 
-export ChannelMLP, SoftGating, GridEmbedding2D, FourierNeuralOperator
+export ChannelMLP, SoftGating, GridEmbedding2D, FourierNeuralOperator, SFNO
 end
