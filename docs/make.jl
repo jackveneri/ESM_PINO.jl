@@ -1,10 +1,13 @@
 using Documenter
 using ESM_PINO, QG3
 
+const ESM_PINOQG3Ext = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext)
+
+
 DocMeta.setdocmeta!(ESM_PINO, :DocTestSetup, :(using ESM_PINO); recursive=true)
 
 makedocs(;
-    modules=[ESM_PINO],
+    modules=[ESM_PINO, ESM_PINOQG3Ext],
     authors="Giacomo Veneri <giacomo.veneri@tum.de>",
     sitename="ESM_PINO.jl",
     format=Documenter.HTML(;
