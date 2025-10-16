@@ -1,5 +1,5 @@
 using Documenter
-using ESM_PINO
+using ESM_PINO, QG3
 
 DocMeta.setdocmeta!(ESM_PINO, :DocTestSetup, :(using ESM_PINO); recursive=true)
 
