@@ -9,7 +9,7 @@ Transforms data from Gaussian grid → spherical harmonics, applies learned weig
 - `ggsh::GaussianGridtoSHTransform`: Transformation from Gaussian grid to spherical harmonics.
 - `shgg::SHtoGaussianGridTransform`: Transformation from spherical harmonics back to Gaussian grid.
 - `modes::Int=ggsh.output_size[1]`: Maximum number of spherical harmonic modes to use. If higher than `ggsh.output_size[1]`, it is truncated with a warning.
-- `zsk::Bool=false`: If true, uses Zonal Symmetric Kernels (ZSK), reducing the number of free weights. It follows follows **Spherical Fourier Neural Operators: Learning Stable Dynamics on the Sphere**, https://arxiv.org/abs/2204.06408.
+- `zsk::Bool=false`: If true, uses Zonal Symmetric Kernels (ZSK), reducing the number of free weights. It follows [**Spherical Fourier Neural Operators: Learning Stable Dynamics on the Sphere**](https://arxiv.org/abs/2204.06408).
 
 
 # Returns
@@ -48,6 +48,7 @@ y, st = layer(x, ps, st)
 # Compute gradient
 using Zygote
 gr = Zygote.gradient(ps -> sum(layer(x, ps, st)[1]), ps)
+```
 """
 struct SphericalConv{G,S} <: ESM_PINO.AbstractSphericalConv 
     hidden_channels::Int
@@ -83,7 +84,7 @@ Construct a spherical convolution layer using precomputed model parameters.
 - `modes::Int=pars.L`: Maximum number of spherical harmonic modes to use. If higher than `pars.L`, it is truncated with a warning.
 - `batch_size::Int=1`: Number of samples in a batch (used for internal transforms).
 - `gpu::Bool=true`: If true, computations are moved to GPU using `QG3.gpuon()`.
-- `zsk::Bool=false`: If true, uses Zonal Symmetric Kernels (ZSK), reducing the number of free weights. ZSK enforces rotational symmetry along longitude and follows **Spherical Fourier Neural Operators: Learning Stable Dynamics on the Sphere**, https://arxiv.org/abs/2204.06408.
+- `zsk::Bool=false`: If true, uses Zonal Symmetric Kernels (ZSK), reducing the number of free weights. ZSK enforces rotational symmetry along longitude and follows [**Spherical Fourier Neural Operators: Learning Stable Dynamics on the Sphere**](https://arxiv.org/abs/2204.06408).
 
 # Returns
 - `SphericalConv`: A Lux-compatible layer operating on 4D arrays `[lat, lon, channels, batch]`.
@@ -117,6 +118,7 @@ y, st = layer(x, ps, st)
 # Compute gradient
 using Zygote
 gr = Zygote.gradient(ps -> sum(layer(x, ps, st)[1]), ps)
+```
 """
 function SphericalConv(
         pars::QG3.QG3ModelParameters{T},
