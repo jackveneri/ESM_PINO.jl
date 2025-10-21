@@ -1,10 +1,3 @@
-struct NoOpLayer <: Lux.AbstractLuxLayer end
-
-Lux.initialparameters(rng::AbstractRNG, ::NoOpLayer) = NamedTuple()
-Lux.initialstates(rng::AbstractRNG, ::NoOpLayer) = NamedTuple()
-(l::NoOpLayer)(x::AbstractArray, ps::NamedTuple, st::NamedTuple) = (x, st)
-LuxCore.parameterlength(::NoOpLayer) = 0
-
 """
     FourierNeuralOperator <: Lux.AbstractLuxContainerLayer
 
@@ -78,10 +71,10 @@ y1, _ = layer1d(x1,
 @show size(y1)   # expect (128, 1, 5)
 ```
 """
-struct FourierNeuralOperator <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :fno_blocks, :projection)}
-    embedding ::Union{NoOpLayer, GridEmbedding2D, GridEmbedding1D, GridEmbedding3D}
+struct FourierNeuralOperator{F,S,T} <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :fno_blocks, :projection)}
+    embedding ::Union{Lux.NoOpLayer, GridEmbedding2D, GridEmbedding1D, GridEmbedding3D}
     lifting ::Lux.AbstractLuxLayer
-    fno_blocks 
+    fno_blocks::Lux.RepeatedLayer{F,S,FNO_Block{T}}
     projection ::Lux.AbstractLuxLayer
 end
 
@@ -97,72 +90,107 @@ function FourierNeuralOperator(;
     activation=NNlib.gelu,
     positional_embedding::AbstractString="grid",
 ) where N
+    
     n_dim = length(n_modes)
-    embedding = nothing
-    if positional_embedding in ["grid","no_grid"]
-        if positional_embedding == "grid" 
-            embedding = GridEmbedding2D()
-            in_channels += n_dim
-        else
-            embedding = NoOpLayer()
-        end
-        lifting = Chain(
-            Conv((1, 1), in_channels => Int(lifting_channel_ratio * hidden_channels), activation),
-            Conv((1, 1), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, activation),
-        )
-        
-        projection = Chain(
-            Conv((1, 1), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation),
-            Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity),
-        )
-        
-        fno_blocks = RepeatedLayer(FNO_Block(hidden_channels, n_modes; expansion_factor=channel_mlp_expansion, activation=activation), repeats=Val(n_layers))
-    else 
-        if positional_embedding in ["grid1D", "no_grid1D"]
-            if positional_embedding == "grid1D"
-                embedding = GridEmbedding1D()
-                in_channels += n_dim
-            else
-                embedding = NoOpLayer()
-            end
-            
-            lifting = Chain(
-                Conv((1,), in_channels => Int(lifting_channel_ratio * hidden_channels), activation),
-                Conv((1,), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, activation),
-            )
-            
-            projection = Chain(
-                Conv((1,), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation),
-                Conv((1,), Int(projection_channel_ratio * hidden_channels) => out_channels, identity),
-            )
-            
-            fno_blocks = RepeatedLayer(FNO_Block1D(hidden_channels, n_modes; expansion_factor=channel_mlp_expansion, activation=activation), repeats=Val(n_layers))
-        else
-            if positional_embedding in ["grid3D", "no_grid3D"]
-                if positional_embedding == "grid3D"
-                    embedding = GridEmbedding3D()
-                    in_channels += n_dim
-                else
-                    embedding = NoOpLayer()
-                end
-                
-                lifting = Chain(
-                    Conv((1, 1, 1), in_channels => Int(lifting_channel_ratio * hidden_channels), activation),
-                    Conv((1, 1, 1), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, activation),
-                )
-                
-                projection = Chain(
-                    Conv((1, 1, 1), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation),
-                    Conv((1, 1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity),
-                )
-                
-                fno_blocks = RepeatedLayer(FNO_Block3D(hidden_channels, n_modes; expansion_factor=channel_mlp_expansion, activation=activation), repeats=Val(n_layers))
-            else
-            throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'grid1D'."))
-            end
-        end
-    end
+    
+    # Validate positional embedding type early
+    _validate_positional_embedding(positional_embedding, n_dim)
+    
+    # Create embedding layer and adjust input channels if needed
+    embedding, adjusted_in_channels = _create_embedding_and_adjust_channels(
+        positional_embedding, in_channels, n_dim
+    )
+    
+    # Create the main FNO components based on dimension
+    lifting, fno_blocks, projection = _create_fno_components(
+        positional_embedding,
+        adjusted_in_channels,
+        out_channels,
+        hidden_channels,
+        n_modes,
+        n_layers,
+        lifting_channel_ratio,
+        projection_channel_ratio,
+        channel_mlp_expansion,
+        activation
+    )
+    
     return FourierNeuralOperator(embedding, lifting, fno_blocks, projection)
+end
+
+function _validate_positional_embedding(embedding_type::AbstractString, n_dim::Int)
+    valid_embeddings = ("grid", "no_grid", "grid1D", "no_grid1D", "grid3D", "no_grid3D")
+    if embedding_type ∉ valid_embeddings
+        throw(ArgumentError(
+            "Invalid positional embedding type. Supported: 'grid', 'grid1D', 'grid3D' and their 'no_grid' variants."
+        ))
+    end
+end
+
+function _create_embedding_and_adjust_channels(embedding_type::AbstractString, in_channels::Int, n_dim::Int)
+    if embedding_type == "grid"
+        return GridEmbedding2D(), in_channels + n_dim
+    elseif embedding_type == "grid1D"
+        return GridEmbedding1D(), in_channels + n_dim
+    elseif embedding_type == "grid3D"
+        return GridEmbedding3D(), in_channels + n_dim
+    else  
+        return Lux.NoOpLayer(), in_channels
+    end
+end
+
+function _create_fno_components(
+    embedding_type::AbstractString,
+    in_channels::Int,
+    out_channels::Int,
+    hidden_channels::Int,
+    n_modes::NTuple{N,Integer},
+    n_layers::Int,
+    lifting_channel_ratio::Int,
+    projection_channel_ratio::Int,
+    channel_mlp_expansion::Number,
+    activation
+) where N
+    
+    # Determine convolution kernel and FNO block type based on embedding
+    kernel, fno_block_type = _get_conv_and_block_types(embedding_type)
+    
+    # Create lifting network
+    lifting_channels = Int(lifting_channel_ratio * hidden_channels)
+    lifting = Chain(
+        Conv(kernel, in_channels => lifting_channels, activation),
+        Conv(kernel, lifting_channels => hidden_channels, activation),
+    )
+    
+    # Create projection network
+    projection_channels = Int(projection_channel_ratio * hidden_channels)
+    projection = Chain(
+        Conv(kernel, hidden_channels => projection_channels, activation),
+        Conv(kernel, projection_channels => out_channels, identity),
+    )
+    
+    # Create FNO blocks
+    fno_blocks = RepeatedLayer(
+        fno_block_type(
+            hidden_channels, 
+            n_modes; 
+            expansion_factor=channel_mlp_expansion, 
+            activation=activation
+        ), 
+        repeats=Val(n_layers)
+    )
+    
+    return lifting, fno_blocks, projection
+end
+
+function _get_conv_and_block_types(embedding_type::AbstractString)
+    if embedding_type in ("grid", "no_grid")
+        return (1, 1), FNO_Block
+    elseif embedding_type in ("grid1D", "no_grid1D")
+        return (1,), FNO_Block1D
+    else  # "grid3D", "no_grid3D"
+        return (1, 1, 1), FNO_Block3D
+    end
 end
 
 function Lux.initialparameters(rng::AbstractRNG, layer::FourierNeuralOperator)
