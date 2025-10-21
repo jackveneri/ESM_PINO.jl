@@ -2,3 +2,6 @@
 /docs/Manifest.toml
 /docs/build/
 /data/ERA5-sf-t21q.nc
+/examples/Manifest.toml
+/data/t21_qg3_data_SH_CPU.jld2
+/data/t42_qg3_data_SH_CPU.jld2

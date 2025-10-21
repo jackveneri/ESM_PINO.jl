@@ -1,14 +1,16 @@
 root = dirname(@__DIR__)
+dir = @__DIR__
 using Pkg
 Pkg.activate(root)
 Pkg.instantiate()
 using ESM_PINO, Printf, CUDA, OnlineStats, Lux, LuxCUDA, Random, Statistics, MLUtils, Optimisers, ParameterSchedulers, QG3, NetCDF, Dates, CFTime, JLD2
 
+const ESM_PINOQG3 = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext)
 const gdev = gpu_device()
 const cdev = cpu_device()
 
 function train_model(x::AbstractArray, target::AbstractArray, pars::QG3ModelParameters, ggsh::QG3.GaussianGridtoSHTransform, shgg::QG3.SHtoGaussianGridTransform; seed::Int=0,
-    maxiters::Int=3000, hidden_channels::Int=32, parameters::Union{Nothing, ESM_PINO.QG3_Physics_Parameters}=nothing)
+    maxiters::Int=3000, hidden_channels::Int=32, parameters::Union{Nothing, ESM_PINOQG3.QG3_Physics_Parameters}=nothing)
     
     rng = Random.default_rng(seed)
     batchsize = 100
@@ -17,7 +19,6 @@ function train_model(x::AbstractArray, target::AbstractArray, pars::QG3ModelPara
     shgg = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=batchsize)
     # Create the model
     sfno = SFNO(
-        qg3ppars,
         ggsh,
         shgg,
         in_channels=3, 
@@ -36,7 +37,7 @@ function train_model(x::AbstractArray, target::AbstractArray, pars::QG3ModelPara
     train_state = Training.TrainState(sfno, ps, st, opt)
     
     if !isnothing(parameters)
-        par_train = ESM_PINO.QG3_Physics_Parameters(
+        par_train = ESM_PINOQG3.QG3_Physics_Parameters(
                 parameters.dt,
                 parameters.qg3p,
                 parameters.S,
@@ -48,8 +49,8 @@ function train_model(x::AbstractArray, target::AbstractArray, pars::QG3ModelPara
     else
         par_train = nothing
     end
-    physics_loss = ESM_PINO.create_QG3_physics_loss(par_train)
-    loss_function = ESM_PINO.select_QG3_loss_function(physics_loss)
+    physics_loss = ESM_PINOQG3.create_QG3_physics_loss(par_train)
+    loss_function = ESM_PINOQG3.select_QG3_loss_function(physics_loss)
     total_loss_tracker, physics_loss_tracker, data_loss_tracker = ntuple(_ -> Lag(Float32, 32), 3)
 
     iter = 1
@@ -115,7 +116,6 @@ shgg_train = QG3.SHtoGaussianGridTransform(qg3ppars, hidden_channels, N_batch=N_
 ggsh_loss = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=N_sims)
 shgg_loss = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=N_sims)    
 sfno = SFNO(
-        qg3ppars,
         ggsh_train,
         shgg_train,
         in_channels=3, 
@@ -132,10 +132,10 @@ q_evolved = q_evolved |> gdev
 sfno(q_0, ps, st)[1]
 GC.gc()
 model = StatefulLuxLayer{true}(sfno, ps, st)
-pars = ESM_PINO.QG3_Physics_Parameters(dt, qg3p, S, ggsh_loss, shgg_loss, μ, σ)
+pars = ESM_PINOQG3.QG3_Physics_Parameters(dt, qg3p, S, ggsh_loss, shgg_loss, μ, σ)
 
-PI_loss = ESM_PINO.create_QG3_physics_loss(pars)
-loss = ESM_PINO.select_QG3_loss_function(PI_loss)
+PI_loss = ESM_PINOQG3.create_QG3_physics_loss(pars)
+loss = ESM_PINOQG3.select_QG3_loss_function(PI_loss)
 
 loss(sfno, ps, st, (q_0, q_evolved))
 
@@ -145,7 +145,6 @@ N_test = 100
 shgg2 = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=N_test)
 ggsh2 = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=N_test)
 test_model = SFNO(
-        qg3ppars,
         ggsh2,
         shgg2,
         in_channels=3, 

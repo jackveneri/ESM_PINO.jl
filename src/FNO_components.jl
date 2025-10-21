@@ -339,8 +339,8 @@ Expects input in (height, width, channels, batch) format.
 - Follows with a channel MLP for nonlinear channel mixing
 - Forms the core computational unit of a Fourier Neural Operator
 """
-struct FNO_Block <: Lux.AbstractLuxLayer
-    spectral_kernel :: SpectralKernel
+struct FNO_Block{T} <: Lux.AbstractLuxLayer
+    spectral_kernel :: SpectralKernel{T,N} where N
     channel_mlp :: ChannelMLP
     channels :: Int
     modes :: NTuple{2, Int}
