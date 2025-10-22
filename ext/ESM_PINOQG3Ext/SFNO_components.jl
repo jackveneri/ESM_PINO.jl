@@ -140,10 +140,26 @@ Expects input in (spatial..., channel, batch) format.
 - The input is processed by a SphericalKernel followed by a ChannelMLP
 - If `skip` is true, the input is added to the output (residual connection)
 """
-function ESM_PINO.SFNO_Block(channels::Int, pars::QG3.QG3ModelParameters; modes::Int=pars.L, batch_size::Int=1, expansion_factor::Real=2.0, activation=NNlib.gelu, skip::Bool=true, gpu::Bool=true, zsk::Bool=false)
+function ESM_PINO.SFNO_Block(
+    channels::Int, 
+    pars::QG3.QG3ModelParameters; 
+    modes::Int=pars.L, 
+    batch_size::Int=1, 
+    expansion_factor::Real=2.0, 
+    activation=NNlib.gelu, 
+    skip::Bool=true, 
+    gpu::Bool=true, 
+    zsk::Bool=false,
+    use_norm::Bool=false)
     spherical_kernel = ESM_PINO.SphericalKernel(channels, pars, activation; modes=modes, batch_size=batch_size, gpu=gpu, zsk=zsk)
+    if use_norm
+        # InstanceNorm expects (H, W, C, B) format by default in Lux
+        norm = Lux.InstanceNorm(channels)
+    else
+        norm = Lux.NoOpLayer()
+    end
     channel_mlp = ChannelMLP(channels, expansion_factor=expansion_factor, activation=activation)
-    return ESM_PINO.SFNO_Block(spherical_kernel, channel_mlp, channels, skip)
+    return ESM_PINO.SFNO_Block(spherical_kernel, norm, channel_mlp, channels, skip)
 end
 """
 $(TYPEDSIGNATURES)
@@ -175,43 +191,62 @@ Expects input in (spatial..., channel, batch) format.
 
 
 """
-function ESM_PINO.SFNO_Block(channels::Int, ggsh::QG3.GaussianGridtoSHTransform, shgg::QG3.SHtoGaussianGridTransform; modes::Int = ggsh.output_size[1], expansion_factor::Real=2.0, activation=NNlib.gelu, skip::Bool=true, zsk::Bool=false)
+function ESM_PINO.SFNO_Block(
+    channels::Int, 
+    ggsh::QG3.GaussianGridtoSHTransform, 
+    shgg::QG3.SHtoGaussianGridTransform; 
+    modes::Int = ggsh.output_size[1], 
+    expansion_factor::Real=2.0, 
+    activation=NNlib.gelu, 
+    skip::Bool=true, 
+    zsk::Bool=false,
+    use_norm::Bool=false)
     spherical_kernel = ESM_PINO.SphericalKernel(channels, ggsh, shgg, activation; modes=modes, zsk=zsk)
+    if use_norm
+        # InstanceNorm expects (H, W, C, B) format by default in Lux
+        norm = Lux.InstanceNorm(channels)
+    else
+        norm = Lux.NoOpLayer()
+    end
     channel_mlp = ChannelMLP(channels, expansion_factor=expansion_factor, activation=activation)
-    return ESM_PINO.SFNO_Block(spherical_kernel, channel_mlp, channels, skip)
+    return ESM_PINO.SFNO_Block(spherical_kernel, norm, channel_mlp, channels, skip)
 end
 
 function Lux.initialparameters(rng::Random.AbstractRNG, block::ESM_PINO.SFNO_Block{ESM_PINOQG3})
     ps_spherical = Lux.initialparameters(rng, block.spherical_kernel)
+    ps_norm = Lux.initialparameters(rng, block.norm)
     ps_channel = Lux.initialparameters(rng, block.channel_mlp)
-    return (spherical_kernel=ps_spherical, channel_mlp=ps_channel)
+    return (spherical_kernel=ps_spherical, norm=ps_norm, channel_mlp=ps_channel)
 end
 
 function Lux.initialstates(rng::Random.AbstractRNG, block::ESM_PINO.SFNO_Block{ESM_PINOQG3})
     st_spherical = Lux.initialstates(rng, block.spherical_kernel)
+    st_norm = Lux.initialstates(rng, block.norm)
     st_channel = Lux.initialstates(rng, block.channel_mlp)
-    return (spherical_kernel=st_spherical, channel_mlp=st_channel)
+    return (spherical_kernel=st_spherical, norm=st_norm, channel_mlp=st_channel)
 end
 
 function (sfno_block::ESM_PINO.SFNO_Block{ESM_PINOQG3})(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     x_spherical, st_spherical = sfno_block.spherical_kernel(x, ps.spherical_kernel, st.spherical_kernel)
-    x_mlp, st_channel = sfno_block.channel_mlp(x_spherical, ps.channel_mlp, st.channel_mlp)
+    x_norm, st_norm = sfno_block.norm(x_spherical, ps.norm, st.norm)
+    x_mlp, st_channel = sfno_block.channel_mlp(x_norm, ps.channel_mlp, st.channel_mlp)
     if sfno_block.skip
         x_out = x + x_mlp
     else
         x_out = x_mlp
     end
-    return x_out, (spherical_kernel=st_spherical, channel_mlp=st_channel)
+    return x_out, (spherical_kernel=st_spherical, norm=st_norm, channel_mlp=st_channel)
 end
 function Lux.apply(sfno_block::ESM_PINO.SFNO_Block{ESM_PINOQG3}, x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     x_spherical, st_spherical = sfno_block.spherical_kernel(x, ps.spherical_kernel, st.spherical_kernel)
-    x_mlp, st_channel = sfno_block.channel_mlp(x_spherical, ps.channel_mlp, st.channel_mlp)
+    x_norm, st_norm = sfno_block.norm(x_spherical, ps.norm, st.norm)
+    x_mlp, st_channel = sfno_block.channel_mlp(x_norm, ps.channel_mlp, st.channel_mlp)
     if sfno_block.skip
         x_out = x + x_mlp
     else
         x_out = x_mlp
     end
-    return x_out, (spherical_kernel=st_spherical, channel_mlp=st_channel)
+    return x_out, (spherical_kernel=st_spherical, norm=st_norm, channel_mlp=st_channel)
 end
 #=
 using JLD2

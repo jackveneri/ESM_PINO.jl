@@ -317,9 +317,8 @@ end
 ChainRulesCore.@non_differentiable (layer::GridEmbedding2D)(::Any)
 
 """
-    FNO_Block(channels::Int, modes::NTuple{2,Int}; expansion_factor=2, activation=gelu)
-
-A block that combines a SpectralKernel with a ChannelMLP.  
+$(TYPEDSIGNATURES)
+A block that combines a SpectralKernel with optional normalization and a ChannelMLP.  
 Expects input in (height, width, channels, batch) format.
 
 # Arguments
@@ -327,46 +326,62 @@ Expects input in (height, width, channels, batch) format.
 - `modes`: Tuple specifying number of low-frequency modes for the spectral convolution
 - `expansion_factor`: Factor controlling hidden dimension size in ChannelMLP (default: 2)
 - `activation`: Nonlinear activation function (default: `NNlib.gelu`)
+- `use_norm`: Whether to use instance normalization after spectral kernel (default: false)
 
 # Fields
 - `spectral_kernel::SpectralKernel`: Combines spectral and spatial convolutions
+- `norm::Union{Lux.InstanceNorm, Lux.NoOpLayer}`: Optional normalization layer
 - `channel_mlp::ChannelMLP`: Channel-wise MLP with skip connection
 - `channels::Int`: Number of channels
-- `modes::NTuple{2,Int}`: Retained Fourier modes
-
-# Details
-- Applies spectral kernel to mix global/local features
-- Follows with a channel MLP for nonlinear channel mixing
-- Forms the core computational unit of a Fourier Neural Operator
+- `modes::NTuple{2, Int}`: Retained Fourier modes
 """
 struct FNO_Block{T} <: Lux.AbstractLuxLayer
-    spectral_kernel :: SpectralKernel{T,N} where N
-    channel_mlp :: ChannelMLP
-    channels :: Int
-    modes :: NTuple{2, Int}
+    spectral_kernel::SpectralKernel{T,N}  where N
+    norm::Union{Lux.InstanceNorm, Lux.NoOpLayer}
+    channel_mlp::ChannelMLP
+    channels::Int
+    modes::NTuple{2, Int}
 end
 
-function FNO_Block(channels::Int, modes::NTuple{2,Int}; expansion_factor=2, activation=NNlib.gelu)
+function FNO_Block(channels::Int, modes::NTuple{2,Int}; 
+                   expansion_factor=2, activation=NNlib.gelu, use_norm=false)
     spectral_kernel = SpectralKernel(channels => channels, modes, activation)
+    
+    # Add optional instance normalization
+    if use_norm
+        # InstanceNorm expects (H, W, C, B) format by default in Lux
+        norm = Lux.InstanceNorm(channels)
+    else
+        norm = Lux.NoOpLayer()
+    end
+    
     channel_mlp = ChannelMLP(channels, expansion_factor=expansion_factor, activation=activation)
-    return FNO_Block(spectral_kernel, channel_mlp, channels, modes)
+    return FNO_Block(spectral_kernel, norm, channel_mlp, channels, modes)
 end
 
 function Lux.initialparameters(rng::AbstractRNG, block::FNO_Block)
     ps_spectral = Lux.initialparameters(rng, block.spectral_kernel)
+    ps_norm = Lux.initialparameters(rng, block.norm)
     ps_channel = Lux.initialparameters(rng, block.channel_mlp)
-    return (spectral_kernel=ps_spectral, channel_mlp=ps_channel)
+    return (spectral_kernel=ps_spectral, norm=ps_norm, channel_mlp=ps_channel)
 end
 
 function Lux.initialstates(rng::AbstractRNG, block::FNO_Block)
     st_spectral = Lux.initialstates(rng, block.spectral_kernel)
+    st_norm = Lux.initialstates(rng, block.norm)
     st_channel = Lux.initialstates(rng, block.channel_mlp)
-    return (spectral_kernel=st_spectral, channel_mlp=st_channel)
+    return (spectral_kernel=st_spectral, norm=st_norm, channel_mlp=st_channel)
 end
 
 function (fno_block::FNO_Block)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
+    # Apply spectral kernel
     x_spectral, st_spectral = fno_block.spectral_kernel(x, ps.spectral_kernel, st.spectral_kernel)
-    x_mlp, st_channel = fno_block.channel_mlp(x_spectral, ps.channel_mlp, st.channel_mlp)
-    return x_mlp, (spectral_kernel=st_spectral, channel_mlp=st_channel)
+    
+    # Apply optional normalization
+    x_norm, st_norm = fno_block.norm(x_spectral, ps.norm, st.norm)
+    
+    # Apply channel MLP
+    x_mlp, st_channel = fno_block.channel_mlp(x_norm, ps.channel_mlp, st.channel_mlp)
+    
+    return x_mlp, (spectral_kernel=st_spectral, norm=st_norm, channel_mlp=st_channel)
 end
-
