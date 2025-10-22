@@ -26,6 +26,7 @@ Empty layer to test extension documentation.
 """
 struct SFNO_Block{T} <: Lux.AbstractLuxLayer
     spherical_kernel :: SphericalKernel{T}
+    norm::Union{Lux.InstanceNorm, Lux.NoOpLayer}
     channel_mlp :: ChannelMLP
     channels :: Int
     skip :: Bool

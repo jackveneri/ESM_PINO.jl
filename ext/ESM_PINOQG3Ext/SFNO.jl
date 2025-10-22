@@ -87,7 +87,8 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
     inner_skip::Bool=true,
     outer_skip::Bool=true,
     gpu=true,
-    zsk=false
+    zsk=false,
+    use_norm::Bool=false
 ) 
     embedding = nothing
     if positional_embedding in ["grid","no_grid"]
@@ -98,16 +99,51 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
             embedding = Lux.NoOpLayer()
         end
         lifting = Lux.Chain(
-            Lux.Conv((1, 1), in_channels => Int(lifting_channel_ratio * hidden_channels), activation, cross_correlation=true, init_weight=kaiming_normal; init_bias=zeros32),
-            Lux.Conv((1, 1), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+            Lux.Conv(
+                (1, 1), 
+                in_channels => Int(lifting_channel_ratio * hidden_channels), 
+                activation, 
+                cross_correlation=true, 
+                init_weight=kaiming_normal; 
+                init_bias=zeros32),
+            Lux.Conv(
+                (1, 1), 
+                Int(lifting_channel_ratio * hidden_channels) => hidden_channels, 
+                identity, cross_correlation=true, 
+                init_weight=kaiming_normal, 
+                init_bias=zeros32),
         )
         
         projection = Lux.Chain(
-            Lux.Conv((1, 1), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation,cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
-            Lux.Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+            Lux.Conv(
+                (1, 1), 
+                hidden_channels => Int(projection_channel_ratio * hidden_channels), 
+                activation,
+                cross_correlation=true, 
+                init_weight=kaiming_normal, 
+                init_bias=zeros32),
+            Lux.Conv(
+                (1, 1), 
+                Int(projection_channel_ratio * hidden_channels) => out_channels, 
+                identity, 
+                cross_correlation=true, 
+                init_weight=kaiming_normal, 
+                init_bias=zeros32),
         )
         
-        sfno_blocks = Lux.RepeatedLayer(ESM_PINO.SFNO_Block(hidden_channels, pars; modes=modes, batch_size=batch_size, expansion_factor=channel_mlp_expansion, activation=activation, skip=inner_skip, gpu=gpu, zsk=zsk), repeats=Val(n_layers))
+        sfno_blocks = Lux.RepeatedLayer(
+            ESM_PINO.SFNO_Block(
+                hidden_channels, 
+                pars; 
+                modes=modes, 
+                batch_size=batch_size, 
+                expansion_factor=channel_mlp_expansion, 
+                activation=activation, 
+                skip=inner_skip, 
+                gpu=gpu, 
+                zsk=zsk,
+                use_norm=use_norm), 
+            repeats=Val(n_layers))
     
     else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'no_grid'."))
@@ -190,7 +226,8 @@ function ESM_PINO.SFNO(
     positional_embedding::AbstractString="grid",
     inner_skip::Bool=true,
     outer_skip::Bool=true,
-    zsk=false
+    zsk=false,
+    use_norm::Bool=false
 )
    embedding = nothing
     if positional_embedding in ["grid","no_grid"]
@@ -201,16 +238,51 @@ function ESM_PINO.SFNO(
             embedding = Lux.NoOpLayer()
         end
          lifting = Lux.Chain(
-            Lux.Conv((1, 1), in_channels => Int(lifting_channel_ratio * hidden_channels), activation, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
-            Lux.Conv((1, 1), Int(lifting_channel_ratio * hidden_channels) => hidden_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+            Lux.Conv(
+                (1, 1), 
+                in_channels => Int(lifting_channel_ratio * hidden_channels), 
+                activation, 
+                cross_correlation=true, 
+                init_weight=kaiming_normal, 
+                init_bias=zeros32),
+            Lux.Conv(
+                (1, 1), 
+                Int(lifting_channel_ratio * hidden_channels) => hidden_channels, 
+                identity, 
+                cross_correlation=true, 
+                init_weight=kaiming_normal, 
+                init_bias=zeros32),
         )
         
         projection = Lux.Chain(
-            Lux.Conv((1, 1), hidden_channels => Int(projection_channel_ratio * hidden_channels), activation, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
-            Lux.Conv((1, 1), Int(projection_channel_ratio * hidden_channels) => out_channels, identity, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
+            Lux.Conv(
+                (1, 1), 
+                hidden_channels => Int(projection_channel_ratio * hidden_channels), 
+                activation, 
+                cross_correlation=true, 
+                init_weight=kaiming_normal, 
+                init_bias=zeros32),
+            Lux.Conv(
+                (1, 1), 
+                Int(projection_channel_ratio * hidden_channels) => out_channels, 
+                identity, 
+                cross_correlation=true, 
+                init_weight=kaiming_normal, 
+                init_bias=zeros32),
         )
         
-        sfno_blocks = Lux.RepeatedLayer(ESM_PINO.SFNO_Block(hidden_channels, ggsh, shgg; modes=modes, expansion_factor=channel_mlp_expansion, activation=activation, skip=inner_skip, zsk=zsk), repeats=Val(n_layers))
+        sfno_blocks = Lux.RepeatedLayer(
+            ESM_PINO.SFNO_Block(
+                hidden_channels, 
+                ggsh, 
+                shgg; 
+                modes=modes, 
+                expansion_factor=channel_mlp_expansion, 
+                activation=activation, 
+                skip=inner_skip, 
+                zsk=zsk,
+                use_norm=use_norm), 
+            repeats=Val(n_layers))
     
     else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'no_grid'."))

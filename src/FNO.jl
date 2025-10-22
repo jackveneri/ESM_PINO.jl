@@ -1,5 +1,5 @@
 """
-    FourierNeuralOperator <: Lux.AbstractLuxContainerLayer
+$(TYPEDSIGNATURES)
 
 A Fourier Neural Operator (FNO) container that optionally includes positional embeddings,
 lifting and projection convolutions, and a stack of FNO blocks.
@@ -18,6 +18,7 @@ lifting and projection convolutions, and a stack of FNO blocks.
 "grid", "no_grid" => 2D variants (GridEmbedding2D or NoOpLayer)
 "grid1D", "no_grid1D" => 1D variants (GridEmbedding1D or NoOpLayer)
 "grid3D", "no_grid3D" => 3D variants (GridEmbedding3D or NoOpLayer)
+- `use_norm_in_blocks::Bool=false`: Whether to use normalization layers inside FNO blocks.
 
 # Fields
 - `embedding`: Positional embedding layer (a GridEmbeddingND or NoOpLayer).
@@ -79,8 +80,8 @@ struct FourierNeuralOperator{F,S,T} <: Lux.AbstractLuxContainerLayer{(:embedding
 end
 
 function FourierNeuralOperator(;
-    in_channels::Int,
-    out_channels::Int,
+    in_channels::Int=3,
+    out_channels::Int=3,
     hidden_channels::Int=32,
     n_modes::NTuple{N,Integer}=(16, 16),
     n_layers::Int=4,
@@ -89,6 +90,7 @@ function FourierNeuralOperator(;
     channel_mlp_expansion::Number=2,
     activation=NNlib.gelu,
     positional_embedding::AbstractString="grid",
+    use_norm_in_blocks::Bool=false,  # New option to control normalization in FNO blocks
 ) where N
     
     n_dim = length(n_modes)
@@ -112,10 +114,57 @@ function FourierNeuralOperator(;
         lifting_channel_ratio,
         projection_channel_ratio,
         channel_mlp_expansion,
-        activation
+        activation,
+        use_norm_in_blocks  # Pass the normalization flag
     )
     
     return FourierNeuralOperator(embedding, lifting, fno_blocks, projection)
+end
+
+function _create_fno_components(
+    embedding_type::AbstractString,
+    in_channels::Int,
+    out_channels::Int,
+    hidden_channels::Int,
+    n_modes::NTuple{N,Integer},
+    n_layers::Int,
+    lifting_channel_ratio::Int,
+    projection_channel_ratio::Int,
+    channel_mlp_expansion::Number,
+    activation,
+    use_norm_in_blocks::Bool  # New parameter
+) where N
+    
+    # Determine convolution kernel and FNO block type based on embedding
+    kernel, fno_block_type = _get_conv_and_block_types(embedding_type)
+    
+    # Create lifting network
+    lifting_channels = Int(lifting_channel_ratio * hidden_channels)
+    lifting = Chain(
+        Conv(kernel, in_channels => lifting_channels, activation),
+        Conv(kernel, lifting_channels => hidden_channels, activation),
+    )
+    
+    # Create projection network
+    projection_channels = Int(projection_channel_ratio * hidden_channels)
+    projection = Chain(
+        Conv(kernel, hidden_channels => projection_channels, activation),
+        Conv(kernel, projection_channels => out_channels, identity),
+    )
+    
+    # Create FNO blocks with optional normalization
+    fno_blocks = RepeatedLayer(
+        fno_block_type(
+            hidden_channels, 
+            n_modes; 
+            expansion_factor=channel_mlp_expansion, 
+            activation=activation,
+            use_norm=use_norm_in_blocks  # Pass to block constructor
+        ), 
+        repeats=Val(n_layers)
+    )
+    
+    return lifting, fno_blocks, projection
 end
 
 function _validate_positional_embedding(embedding_type::AbstractString, n_dim::Int)
@@ -137,50 +186,6 @@ function _create_embedding_and_adjust_channels(embedding_type::AbstractString, i
     else  
         return Lux.NoOpLayer(), in_channels
     end
-end
-
-function _create_fno_components(
-    embedding_type::AbstractString,
-    in_channels::Int,
-    out_channels::Int,
-    hidden_channels::Int,
-    n_modes::NTuple{N,Integer},
-    n_layers::Int,
-    lifting_channel_ratio::Int,
-    projection_channel_ratio::Int,
-    channel_mlp_expansion::Number,
-    activation
-) where N
-    
-    # Determine convolution kernel and FNO block type based on embedding
-    kernel, fno_block_type = _get_conv_and_block_types(embedding_type)
-    
-    # Create lifting network
-    lifting_channels = Int(lifting_channel_ratio * hidden_channels)
-    lifting = Chain(
-        Conv(kernel, in_channels => lifting_channels, activation),
-        Conv(kernel, lifting_channels => hidden_channels, activation),
-    )
-    
-    # Create projection network
-    projection_channels = Int(projection_channel_ratio * hidden_channels)
-    projection = Chain(
-        Conv(kernel, hidden_channels => projection_channels, activation),
-        Conv(kernel, projection_channels => out_channels, identity),
-    )
-    
-    # Create FNO blocks
-    fno_blocks = RepeatedLayer(
-        fno_block_type(
-            hidden_channels, 
-            n_modes; 
-            expansion_factor=channel_mlp_expansion, 
-            activation=activation
-        ), 
-        repeats=Val(n_layers)
-    )
-    
-    return lifting, fno_blocks, projection
 end
 
 function _get_conv_and_block_types(embedding_type::AbstractString)

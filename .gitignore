@@ -5,3 +5,5 @@
 /examples/Manifest.toml
 /data/t21_qg3_data_SH_CPU.jld2
 /data/t42_qg3_data_SH_CPU.jld2
+/models/
+/examples/experiment.jl

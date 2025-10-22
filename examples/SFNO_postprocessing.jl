@@ -1,37 +1,30 @@
 root = dirname(@__DIR__)
+dir = @__DIR__
 using Pkg
-Pkg.activate(root)
+Pkg.activate(dir)
 Pkg.instantiate()
-using ESM_PINO, JLD2, CairoMakie, Printf, Statistics, QG3, NetCDF, Dates, CFTime, Lux, CUDA, LuxCUDA, Random
+using ESM_PINO, JLD2, GeoMakie, CairoMakie, Printf, Statistics, QG3, NetCDF, Dates, CFTime, Lux, CUDA, LuxCUDA, Random
 
 gdev = gpu_device()
 cdev = cpu_device()
 
 model_string = "SFNO_PINO"
 
-@load string(root, "/data/t21-precomputed-p.jld2") qg3ppars
+@load string(root, "/data/t42-precomputed-p.jld2") qg3ppars
 qg3ppars = qg3ppars
 qg3p = CUDA.@allowscalar QG3Model(qg3ppars)
 
-@load string(root,"/data/solq.jld2") solu
-solu = CuArray(cat(solu...,dims=4))
-shgg = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=size(solu,4))
-solu = QG3.transform_grid(solu, shgg)
-solu = permutedims(solu,(2,3,1,4))
-solu,  μ, σ = ESM_PINO.normalize_data(solu)
-
 @load string(root,"/models/",model_string,"_results.jld2")  sf_plot_pred sf_plot_evolved mistake loss ps st
-@load string(root, "/data/plotting_utils.jld2") clims time_scale
-@load string(root,"/data/t21_qg3_data_SH_CPU.jld2") t q
+@load string(root,"/data/t42_qg3_data_SH_CPU.jld2") t q
 q = QG3.reorder_SH_gpu(q, qg3p.p)
 solu = permutedims(QG3.transform_grid_data(q, qg3p),(2,3,1,4))
+solu,  μ, σ = ESM_PINO.normalize_data(solu)
 
 N_test = 100
 hidden_channels = 128
 shgg2 = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=N_test)
 ggsh2 = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=N_test)
 test_model = SFNO(
-        qg3ppars,
         ggsh2,
         shgg2,
         in_channels=3, 
@@ -45,7 +38,7 @@ ps, st = gdev(ps), gdev(st)
 trained_u = Lux.testmode(StatefulLuxLayer{true}(test_model, ps, st))
 
 
-q_test = ((solu[:,:,:,1001:1100] .- μ ) ./ σ)  |> gdev
+q_test = solu[:,:,:,1001:1100]   |> gdev
 q_test_evolved = solu[:,:,:,1002:1101]
 
 q_test_array = (Float32.(q_test))
