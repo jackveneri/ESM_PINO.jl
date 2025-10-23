@@ -16,4 +16,6 @@ include("ESM_PINOQG3Ext/SFNO_components.jl")
 include("ESM_PINOQG3Ext/losses.jl")
 include("ESM_PINOQG3Ext/utilities.jl")
 include("ESM_PINOQG3Ext/SFNO.jl")
+
+export qg3pars_constructor_helper
 end

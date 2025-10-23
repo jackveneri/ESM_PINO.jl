@@ -51,3 +51,10 @@ function transfer_SFNO_model(model, qg3ppars; batch_size=model.sfno_blocks.model
         )
     return superres_model
 end
+
+function qg3pars_constructor_helper(L::Int, n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real=1e-8,NF::Type{<:AbstractFloat}=Float32)
+    lats, lons  = (ESM_PINO.gaussian_grid(n_lat; n_lon=n_lon, iters=iters, tol=tol))
+    lats, lons = NF.(lats), NF.(lons)
+    LS = h = zeros(NF, n_lat, n_lon)
+    QG3ModelParameters(L, lats, lons, LS, h)
+end

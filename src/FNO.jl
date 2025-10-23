@@ -30,7 +30,7 @@ lifting and projection convolutions, and a stack of FNO blocks.
 
 Example (2D data with grid embedding):
 ```julia
-using Lux, Random, NNlib
+using Lux, Random, ESM_PINO
 
 rng = Random.default_rng()
 
@@ -52,8 +52,11 @@ x = randn(Float32, 64, 64, 3, 10)
 y, st_new = layer(x, ps, st)
 @show size(y)   # expect (64, 64, 2, 10)
 ```
+
+Another FNO example (1D data without grid embedding):
+
 ```julia
-Example (1D data without grid embedding):
+using Lux, Random, ESM_PINO
 
 layer1d = FourierNeuralOperator(
     in_channels=1,

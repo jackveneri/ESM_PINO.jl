@@ -5,7 +5,7 @@ Empty layer to test extension documentation.
 struct SFNO{F,S,T} <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :sfno_blocks, :projection)}
     embedding ::Union{Lux.NoOpLayer, GridEmbedding2D}
     lifting ::Lux.AbstractLuxLayer
-    sfno_blocks ::Lux.RepeatedLayer{F,S,SFNO_Block{T}}
+    sfno_blocks ::Lux.RepeatedLayer{F,S,SFNO_Block{T}} #rewrite with  Lux.Chain to handle different block structures
     projection ::Lux.AbstractLuxLayer
     outer_skip :: Bool
     lifting_channel_ratio::Int

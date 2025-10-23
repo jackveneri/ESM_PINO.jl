@@ -156,9 +156,11 @@ function (layer::ESM_PINO.SphericalConv{ESM_PINOQG3})(x::AbstractArray{T,4}, ps:
     @views begin
     x_perm = permutedims(x, (3, 1, 2, 4))  # [channels, lat, lon, batch]
     x_tr = QG3.transform_SH(x_perm, layer.plan.ggsh)
+    x_tr = QG3.reorder_SH_cpu(x_tr, layer.plan.ggsh)  # reorder for correct m indexing
     # Type-stable element-wise multiplication with broadcast
     x_p = ps.weight .* x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]  
     x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(x_tr, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
+    x_out = QG3.reorder_SH_gpu(x_out, layer.plan.shgg)
     x_out = QG3.transform_grid(x_pad, layer.plan.shgg)
     x_out_perm = permutedims(x_out, (2, 3, 1, 4)) # [lat, lon, channels, batch]
     end  
@@ -169,10 +171,12 @@ function Lux.apply(layer::ESM_PINO.SphericalConv{ESM_PINOQG3}, x::AbstractArray{
     @views begin
     x_perm = permutedims(x, (3, 1, 2, 4))  # [channels, lat, lon, batch]
     x_tr = QG3.transform_SH(x_perm, layer.plan.ggsh)
+    x_tr = QG3.reorder_SH_cpu(x_tr, layer.plan.ggsh)  # reorder for correct m indexing
     # Type-stable element-wise multiplication with broadcast
     x_p = ps.weight .* x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]  
     x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(x_tr, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
     x_out = QG3.transform_grid(x_pad, layer.plan.shgg)
+    x_out = QG3.reorder_SH_gpu(x_out, layer.plan.shgg)  
     x_out_perm = permutedims(x_out, (2, 3, 1, 4)) # [lat, lon, channels, batch]
     end  
     return x_out_perm, st

@@ -84,3 +84,73 @@ end
 function denormalize_data(data, μ, σ)
     return data .* σ .+ μ
 end
+
+function gaussian_grid(n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real=1e-8)
+    """
+    Generate Gaussian grid with proper Gaussian latitudes using Legendre polynomials.
+    This is more accurate but requires numerical integration.
+    """
+    
+    # Longitudes (equally spaced)
+    lon_step = 2π / n_lon
+    longitudes = range(0, 2π - lon_step, length=n_lon)
+    
+    # Gaussian latitudes (using Legendre polynomial roots)
+    # This approximates the Gaussian quadrature points
+    latitudes = compute_gaussian_latitudes(n_lat, iters=iters, tol=tol)
+    
+    return latitudes, longitudes 
+end
+
+
+function compute_gaussian_latitudes(n_lat::Int; iters::Int=100, tol::Real=1e-8)
+    """
+    Compute Gaussian latitudes using Newton's method to find roots of Legendre polynomials.
+    """
+    latitudes = zeros(n_lat)
+    
+    # Initial guesses for the roots (Chebyshev nodes as starting points)
+    for i in 1:n_lat
+        # Initial guess using Chebyshev nodes
+        x0 = cos(π * (i - 0.5) / n_lat)
+        
+        # Refine using Newton's method
+        x = x0
+        for _ in 1:iters  # Usually converges quickly
+            p, dp = legendre_polynomial(n_lat, x)
+            x -= p / dp
+            abs(p) < tol && break
+        end
+        
+        # Convert from cosine of colatitude to latitude in radians
+        latitudes[i] = asin(x)
+    end
+    
+    return sort(latitudes)  # Return sorted from south to north
+end
+
+function legendre_polynomial(n::Int, x::Float64)
+    """
+    Compute Legendre polynomial P_n(x) and its derivative using recurrence relation.
+    """
+    if n == 0
+        return 1.0, 0.0
+    elseif n == 1
+        return x, 1.0
+    end
+    
+    p_prev = 1.0
+    p_curr = x
+    dp_prev = 0.0
+    dp_curr = 1.0
+    
+    for k in 2:n
+        p_next = ((2k - 1) * x * p_curr - (k - 1) * p_prev) / k
+        dp_next = ((2k - 1) * (p_curr + x * dp_curr) - (k - 1) * dp_prev) / k
+        
+        p_prev, p_curr = p_curr, p_next
+        dp_prev, dp_curr = dp_curr, dp_next
+    end
+    
+    return p_curr, dp_curr
+end

@@ -19,6 +19,8 @@ makedocs(;
     pages=[
         "Home" => "index.md",
         "Reference" => "ref.md",
+        "QG3 Extension" => "extensions/QG3.md",
+        "SpeedyWeather Extension" => "extensions/SpeedyWeather.md",
     ],
 )
 
