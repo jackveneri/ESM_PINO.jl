@@ -86,9 +86,9 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
     positional_embedding::AbstractString="grid",
     inner_skip::Bool=true,
     outer_skip::Bool=true,
-    gpu=true,
     zsk=false,
-    use_norm::Bool=false
+    use_norm::Bool=false,
+    downsampling_factor::Int=1
 ) 
     embedding = nothing
     if positional_embedding in ["grid","no_grid"]
@@ -131,24 +131,54 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
                 init_bias=zeros32),
         )
         
-        sfno_blocks = Lux.RepeatedLayer(
-            ESM_PINO.SFNO_Block(
+        pars_outer_layers = qg3pars_constructor_helper(pars.L ÷ downsampling_factor, pars.N_lats)
+        pars_inner_layers = qg3pars_constructor_helper(pars.L ÷ downsampling_factor, pars.N_lats ÷ downsampling_factor)
+        ggsh_outer = QG3.GaussianGridtoSHTransform(pars_outer_layers, hidden_channels, N_batch=batch_size)
+        shgg_outer = QG3.SHtoGaussianGridTransform(pars_outer_layers, hidden_channels, N_batch=batch_size)
+        ggsh_inner = QG3.GaussianGridtoSHTransform(pars_inner_layers, hidden_channels, N_batch=batch_size)
+        shgg_inner = QG3.SHtoGaussianGridTransform(pars_inner_layers, hidden_channels, N_batch=batch_size)
+        blocks = []
+        block1 = ESM_PINO.SFNO_Block(
+            hidden_channels, 
+            ggsh_outer, 
+            shgg_inner; 
+            modes=modes, 
+            expansion_factor=channel_mlp_expansion, 
+            activation=activation, 
+            skip=inner_skip,
+            zsk=zsk,
+            use_norm=use_norm)
+        push!(blocks, block1)
+        for i in 2:n_layers-1
+            blocki = ESM_PINO.SFNO_Block(
                 hidden_channels, 
-                pars; 
-                modes=modes, 
-                batch_size=batch_size, 
+                ggsh_inner, 
+                shgg_inner; 
+                modes=modes,
                 expansion_factor=channel_mlp_expansion, 
                 activation=activation, 
-                skip=inner_skip, 
-                gpu=gpu, 
+                skip=inner_skip,  
                 zsk=zsk,
-                use_norm=use_norm), 
-            repeats=Val(n_layers))
-    
+                use_norm=use_norm)
+            push!(blocks, blocki)
+        end
+        final_block = ESM_PINO.SFNO_Block(
+            hidden_channels, 
+            ggsh_inner, 
+            shgg_outer; 
+            modes=modes, 
+            expansion_factor=channel_mlp_expansion, 
+            activation=activation, 
+            skip=inner_skip, 
+            zsk=zsk,
+            use_norm=use_norm)
+        push!(blocks, final_block)
+        sfno_blocks = Lux.Chain(blocks...)
+        plan = ESM_PINOQG3(ggsh_outer, shgg_outer, pars_inner_layers) #dummy plan to satisfy type parameter
     else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'no_grid'."))
     end
-    return ESM_PINO.SFNO(embedding, lifting, sfno_blocks, projection, outer_skip, lifting_channel_ratio, projection_channel_ratio)
+    return ESM_PINO.SFNO(embedding, lifting, sfno_blocks, projection, plan, outer_skip, lifting_channel_ratio, projection_channel_ratio)
 end
 """
 $(TYPEDSIGNATURES)
@@ -211,7 +241,7 @@ using Zygote
 gr = Zygote.gradient(ps -> sum(model2(x, ps, st)[1]), ps)
 ```
 """
-function ESM_PINO.SFNO(
+function ESM_PINO.SFNO( #could become useless if I don't find a way to handle downsampling
     ggsh::QG3.GaussianGridtoSHTransform,
     shgg::QG3.SHtoGaussianGridTransform;
     modes::Int=ggsh.output_size[1],
@@ -227,7 +257,8 @@ function ESM_PINO.SFNO(
     inner_skip::Bool=true,
     outer_skip::Bool=true,
     zsk=false,
-    use_norm::Bool=false
+    use_norm::Bool=false,
+    downsampling_factor::Int=1
 )
    embedding = nothing
     if positional_embedding in ["grid","no_grid"]
@@ -271,26 +302,62 @@ function ESM_PINO.SFNO(
                 init_bias=zeros32),
         )
         
-        sfno_blocks = Lux.RepeatedLayer(
-            ESM_PINO.SFNO_Block(
+        QG3.gpuoff()
+        L = modes
+        N_lats = shgg.output_size[1]
+        batch_size = ggsh.FT_4d.plan.input_size[4]
+        QG3.gpuon()
+        pars_outer_layers = qg3pars_constructor_helper(L ÷ downsampling_factor, N_lats)
+        pars_inner_layers = qg3pars_constructor_helper(L ÷ downsampling_factor, N_lats ÷ downsampling_factor)
+        ggsh_outer = QG3.GaussianGridtoSHTransform(pars_outer_layers, hidden_channels, N_batch=batch_size)
+        shgg_outer = QG3.SHtoGaussianGridTransform(pars_outer_layers, hidden_channels, N_batch=batch_size)
+        ggsh_inner = QG3.GaussianGridtoSHTransform(pars_inner_layers, hidden_channels, N_batch=batch_size)
+        shgg_inner = QG3.SHtoGaussianGridTransform(pars_inner_layers, hidden_channels, N_batch=batch_size)
+        blocks = []
+        block1 = ESM_PINO.SFNO_Block(
+            hidden_channels, 
+            ggsh_outer, 
+            shgg_inner; 
+            modes=modes, 
+            expansion_factor=channel_mlp_expansion, 
+            activation=activation, 
+            skip=inner_skip,
+            zsk=zsk,
+            use_norm=use_norm)
+        push!(blocks, block1)
+        for i in 2:n_layers-1
+            blocki = ESM_PINO.SFNO_Block(
                 hidden_channels, 
-                ggsh, 
-                shgg; 
-                modes=modes, 
+                ggsh_inner, 
+                shgg_inner; 
+                modes=modes,
                 expansion_factor=channel_mlp_expansion, 
                 activation=activation, 
-                skip=inner_skip, 
+                skip=inner_skip,  
                 zsk=zsk,
-                use_norm=use_norm), 
-            repeats=Val(n_layers))
-    
+                use_norm=use_norm)
+            push!(blocks, blocki)
+        end
+        final_block = ESM_PINO.SFNO_Block(
+            hidden_channels, 
+            ggsh_inner, 
+            shgg_outer; 
+            modes=modes, 
+            expansion_factor=channel_mlp_expansion, 
+            activation=activation, 
+            skip=inner_skip, 
+            zsk=zsk,
+            use_norm=use_norm)
+        push!(blocks, final_block)
+        sfno_blocks = Lux.Chain(blocks...)
+        plan = ESM_PINOQG3(ggsh, shgg, pars_inner_layers) #dummy plan to satisfy type parameter    
     else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'no_grid'."))
     end
-    return SFNO(embedding, lifting, sfno_blocks, projection, outer_skip, lifting_channel_ratio, projection_channel_ratio) 
+    return SFNO(embedding, lifting, sfno_blocks, projection, plan, outer_skip, lifting_channel_ratio, projection_channel_ratio) 
 end
 
-function Lux.initialparameters(rng::Random.AbstractRNG, layer::ESM_PINO.SFNO{F,S,ESM_PINOQG3}) where {F,S}
+function Lux.initialparameters(rng::Random.AbstractRNG, layer::ESM_PINO.SFNO{E, L, B, P, ESM_PINOQG3}) where {E, L, B, P} 
     ps_embedding = isnothing(layer.embedding) ? NamedTuple() : Lux.initialparameters(rng, layer.embedding)
     ps_lifting = Lux.initialparameters(rng, layer.lifting)
     ps_sfno_blocks = Lux.initialparameters(rng, layer.sfno_blocks)
@@ -303,7 +370,7 @@ function Lux.initialparameters(rng::Random.AbstractRNG, layer::ESM_PINO.SFNO{F,S
     )
 end
 
-function Lux.initialstates(rng::Random.AbstractRNG, layer::ESM_PINO.SFNO{F,S,ESM_PINOQG3}) where {F,S}
+function Lux.initialstates(rng::Random.AbstractRNG, layer::ESM_PINO.SFNO{E, L, B, P, ESM_PINOQG3}) where {E, L, B, P} 
     st_embedding = isnothing(layer.embedding) ? NamedTuple() : Lux.initialstates(rng, layer.embedding)
     st_lifting = Lux.initialstates(rng, layer.lifting)
     st_sfno_blocks = Lux.initialstates(rng, layer.sfno_blocks)
@@ -316,7 +383,7 @@ function Lux.initialstates(rng::Random.AbstractRNG, layer::ESM_PINO.SFNO{F,S,ESM
     )
 end
 
-function (layer::ESM_PINO.SFNO{F,S,ESM_PINOQG3})(x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {F,S}
+function (layer::ESM_PINO.SFNO{E, L, B, P, ESM_PINOQG3})(x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {E, L, B, P} 
     if !isnothing(layer.embedding)
         x, st_embedding = layer.embedding(x, ps.embedding, st.embedding)
     else
@@ -335,7 +402,7 @@ function (layer::ESM_PINO.SFNO{F,S,ESM_PINOQG3})(x::AbstractArray, ps::NamedTupl
     
     return x, (embedding=st_embedding, lifting=st_lifting, sfno_blocks=st_sfno_blocks, projection=st_projection)
 end
-function Lux.apply(layer::ESM_PINO.SFNO{F,S,ESM_PINOQG3}, x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {F,S}
+function Lux.apply(layer::ESM_PINO.SFNO{E, L, B, P, ESM_PINOQG3}, x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {E, L, B, P} 
     if !isnothing(layer.embedding)
         x, st_embedding = layer.embedding(x, ps.embedding, st.embedding)
     else

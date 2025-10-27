@@ -64,6 +64,33 @@ struct QG3_Physics_Parameters
     shgg::QG3.SHtoGaussianGridTransform
     μ::Real
     σ::Real
+    weights::AbstractArray
+end
+
+function QG3_Physics_Parameters(dt::Float64,
+    qg3p::QG3.QG3Model,
+    S::AbstractArray,
+    ggsh::QG3.GaussianGridtoSHTransform,
+    shgg::QG3.SHtoGaussianGridTransform,
+    μ::Real,
+    σ::Real)
+    geom_weights = reshape(qg3p.p.μ, 1, :, 1, 1)
+    quad_weights = reshape(QG3.compute_GaussWeights(qg3p.p), :, 1, 1, 1)
+    weights = geom_weights .* quad_weights
+    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, weights)
+end
+
+function QG3_Physics_Parameters(dt::Float64,
+    qg3p::QG3.QG3Model,
+    S::AbstractArray,
+    μ::Real,
+    σ::Real)
+    ggsh = QG3.GaussianGridtoSHTransform(qg3p.p, N_batch=1)
+    shgg = QG3.SHtoGaussianGridTransform(qg3p.p, N_batch=1)
+    geom_weights = reshape(qg3p.p.μ, 1, :, 1, 1)
+    quad_weights = reshape(QG3.compute_GaussWeights(qg3p.p), :, 1, 1, 1)
+    weights = geom_weights .* quad_weights
+    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, weights)
 end
 """
     create_QG3_physics_loss()
@@ -104,6 +131,14 @@ function create_QG3_physics_loss(::Nothing)
     return QG3_physics_loss
 end
 
+function geometric_mse_loss_function_QG3(u::Lux.StatefulLuxLayer, target::AbstractArray, input::AbstractArray, pars::QG3_Physics_Parameters)
+    weights = pars.weights
+    u_pred = u(input)
+    geom_cw_loss = sqrt.(sum((@. (u_pred - target)^2 * weights), dims=(2,3)) ./ 
+                     sum((@. weights * u_pred^2), dims=(2,3)))
+    return mean(geom_cw_loss)
+end
+
 function mse_loss_function_QG3(u::Lux.StatefulLuxLayer, target::AbstractArray, u_t1::AbstractArray)
     return Lux.MSELoss()(u(u_t1), target)
 end
@@ -127,4 +162,16 @@ function select_QG3_loss_function(PI_loss::Function=create_QG3_physics_loss(noth
         )
     end
     return QG3_loss_function
+end
+
+function autoregressive_loss(u::Lux.StatefulLuxLayer, target::AbstractArray, u_t1::AbstractArray, loss::Function, steps::Int)
+    total_loss = 0.f0
+    current_input = u_t1
+    for step in 1:steps
+        current_output = u(current_input)
+        step_loss = loss(current_output, target[:,:,:,:,step])
+        total_loss += step_loss
+        current_input = current_output
+    end
+    return total_loss / steps
 end

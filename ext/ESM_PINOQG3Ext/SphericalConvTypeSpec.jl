@@ -53,17 +53,32 @@ function ESM_PINO.SphericalConv(
         hidden_channels::Int,
         ggsh::QG3.GaussianGridtoSHTransform,
         shgg::QG3.SHtoGaussianGridTransform,
-        modes::Int = ggsh.output_size[1];
+        modes::Int = 0;
         zsk::Bool = false
     )
-    plan = ESM_PINOQG3(ggsh, shgg)
+    QG3.gpuoff()
+    safe_modes = ggsh.output_size[1]
+    QG3.gpuon()
     # Correct modes if necessary
-    corrected_modes = min(modes, ggsh.output_size[1])
-    if modes != corrected_modes
-        @warn "modes ($modes) exceeds ggsh.output_size[1] ($(ggsh.output_size[1])). Setting modes = $(ggsh.output_size[1])."
+    corrected_modes = 0
+    if modes == 0
+        corrected_modes = safe_modes
+    else
+        corrected_modes = min(modes, safe_modes)
     end
+    if modes > corrected_modes
+        @warn "modes ($modes) exceeds safe_modes ($(safe_modes)). Setting modes = $(safe_modes)."
+    end
+    pars = qg3pars_constructor_helper(corrected_modes, shgg.output_size[1])
     # Create the struct with the corrected value
-    ESM_PINO.SphericalConv{ESM_PINOQG3}(hidden_channels, corrected_modes, plan, zsk)
+    plan = ESM_PINOQG3(ggsh, shgg, pars)
+    gpu_columns = [1]
+    for k in 1:corrected_modes-1
+        push!(gpu_columns, [k+1, ggsh.FT_4d.i_imag+k+1]... )
+    end
+    perm_plan = remap_plan(corrected_modes-1, size(shgg.P,3)÷2, gpu=QG3.cuda_used[])   
+# Store in layer
+ESM_PINO.SphericalConv{ESM_PINOQG3}(hidden_channels, corrected_modes, plan, zsk, gpu_columns, perm_plan)
 end
 
 """
@@ -134,8 +149,15 @@ function ESM_PINO.SphericalConv(
 
     ggsh = QG3.GaussianGridtoSHTransform(pars, hidden_channels; N_batch=batch_size)
     shgg = QG3.SHtoGaussianGridTransform(pars, hidden_channels; N_batch=batch_size)
-    plan = ESM_PINOQG3(ggsh, shgg)
-    ESM_PINO.SphericalConv{ESM_PINOQG3}(hidden_channels, corrected_modes, plan, zsk)
+    plan = ESM_PINOQG3(ggsh, shgg, pars)
+    gpu_columns = [1]
+    for k in 1:corrected_modes-1
+        push!(gpu_columns, [k+1, ggsh.FT_4d.i_imag+k+1]... )
+    end
+    perm_plan = remap_plan(corrected_modes-1, size(ggsh.P,3)÷2, gpu=QG3.cuda_used[])
+
+# Store in layer
+ESM_PINO.SphericalConv{ESM_PINOQG3}(hidden_channels, corrected_modes, plan, zsk, gpu_columns, perm_plan)
 end
 
 function Lux.initialparameters(rng::Random.AbstractRNG, layer::ESM_PINO.SphericalConv{ESM_PINOQG3})
@@ -154,59 +176,52 @@ Lux.initialstates(rng::Random.AbstractRNG, layer::ESM_PINO.SphericalConv{ESM_PIN
 function (layer::ESM_PINO.SphericalConv{ESM_PINOQG3})(x::AbstractArray{T,4}, ps::NamedTuple, st::NamedTuple) where T
     @assert T == typeof(layer.plan.ggsh).parameters[1] "Input type $T does not match model parameter type $(typeof(layer.plan.ggsh).parameters[1]))"
     @views begin
-    x_perm = permutedims(x, (3, 1, 2, 4))  # [channels, lat, lon, batch]
-    x_tr = QG3.transform_SH(x_perm, layer.plan.ggsh)
-    x_tr = QG3.reorder_SH_cpu(x_tr, layer.plan.ggsh)  # reorder for correct m indexing
-    # Type-stable element-wise multiplication with broadcast
-    x_p = ps.weight .* x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]  
-    x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(x_tr, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
-    x_out = QG3.reorder_SH_gpu(x_out, layer.plan.shgg)
-    x_out = QG3.transform_grid(x_pad, layer.plan.shgg)
-    x_out_perm = permutedims(x_out, (2, 3, 1, 4)) # [lat, lon, channels, batch]
-    end  
-    return x_out_perm, st
+        x_perm = permutedims(x, (3, 1, 2, 4))  # [channels, lat, lon, batch]
+        x_tr = QG3.transform_SH(x_perm, layer.plan.ggsh)
+        if typeof(layer.plan.ggsh).parameters[end] == true
+            x_p = ps.weight .* x_tr[:, 1:layer.modes, layer.gpu_cols, :]
+            x_res = x_tr[:, 1:layer.modes, layer.gpu_cols, :]
+        else
+            x_p = ps.weight .* x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
+            x_res = x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
+        end
+        # Type-stable element-wise multiplication with broadcast
+        x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
+        x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
+        if typeof(layer.plan.ggsh).parameters[end] == true 
+            x_pad = remap_symmetric_dim(x_pad, layer.permute_plan)[1]
+            x_res_pad = remap_symmetric_dim(x_res_pad, layer.permute_plan)[1]
+        end
+        x_out = QG3.transform_grid(x_pad, layer.plan.shgg)
+        res_out = QG3.transform_grid(x_res_pad, layer.plan.shgg)
+        x_out_perm = permutedims(x_out, (2, 3, 1, 4)) # [lat, lon, channels, batch]
+        res_out_perm = permutedims(res_out, (2, 3, 1, 4)) # [lat, lon, channels, batch]
+    end 
+    return x_out_perm, res_out_perm, st
 end
 function Lux.apply(layer::ESM_PINO.SphericalConv{ESM_PINOQG3}, x::AbstractArray{T,4}, ps::NamedTuple, st::NamedTuple) where T
     @assert T == typeof(layer.plan.ggsh).parameters[1] "Input type $T does not match model parameter type $(typeof(layer.plan.ggsh).parameters[1]))"
     @views begin
-    x_perm = permutedims(x, (3, 1, 2, 4))  # [channels, lat, lon, batch]
-    x_tr = QG3.transform_SH(x_perm, layer.plan.ggsh)
-    x_tr = QG3.reorder_SH_cpu(x_tr, layer.plan.ggsh)  # reorder for correct m indexing
-    # Type-stable element-wise multiplication with broadcast
-    x_p = ps.weight .* x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]  
-    x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(x_tr, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
-    x_out = QG3.transform_grid(x_pad, layer.plan.shgg)
-    x_out = QG3.reorder_SH_gpu(x_out, layer.plan.shgg)  
-    x_out_perm = permutedims(x_out, (2, 3, 1, 4)) # [lat, lon, channels, batch]
-    end  
-    return x_out_perm, st
+        x_perm = permutedims(x, (3, 1, 2, 4))  # [channels, lat, lon, batch]
+        x_tr = QG3.transform_SH(x_perm, layer.plan.ggsh)
+        if typeof(layer.plan.ggsh).parameters[end] == true
+            x_p = ps.weight .* x_tr[:, 1:layer.modes, layer.gpu_cols, :]
+            x_res = x_tr[:, 1:layer.modes, layer.gpu_cols, :]
+        else
+            x_p = ps.weight .* x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
+            x_res = x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
+        end
+        # Type-stable element-wise multiplication with broadcast
+        x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
+        x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
+        if typeof(layer.plan.ggsh).parameters[end] == true 
+            x_pad = remap_symmetric_dim(x_pad, layer.permute_plan)[1]
+            x_res_pad = remap_symmetric_dim(x_res_pad, layer.permute_plan)[1]
+        end
+        x_out = QG3.transform_grid(x_pad, layer.plan.shgg)
+        res_out = QG3.transform_grid(x_res_pad, layer.plan.shgg)
+        x_out_perm = permutedims(x_out, (2, 3, 1, 4)) # [lat, lon, channels, batch]
+        res_out_perm = permutedims(res_out, (2, 3, 1, 4)) # [lat, lon, channels, batch]
+    end 
+    return x_out_perm, res_out_perm, st
 end
-#=
-using JLD2, Lux, Random, QG3, NNlib
-@load string(dirname(@__DIR__), "/data/t21-precomputed-p.jld2") qg3ppars
-
-
-# pre-compute the model 
-qg3ppars = qg3ppars
-QG3.gpuoff()
-ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, 32, N_batch=1)
-shgg = QG3.SHtoGaussianGridTransform(qg3ppars, 32, N_batch=1)
-x = rand(Float32, 32, 64, 32, 1)
-model = SphericalConv(32, ggsh, shgg, 30, zsk=true)
-gdev = gpu_device()
-rnd = Random.default_rng(0)
-ps, st = Lux.setup(rnd, model)
-x = x 
-model(x, ps, st)
-
-using Zygote
-gr = Zygote.gradient(ps -> sum(model(x, ps, st)[1]), ps)
-
-@load string(dirname(@__DIR__), "/data/t42-precomputed-p.jld2") qg3ppars
-qg3ppars = qg3ppars
-ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, 32, N_batch=1)
-shgg = QG3.SHtoGaussianGridTransform(qg3ppars, 32, N_batch=1)
-model = SphericalConv(qg3ppars, 32, modes=model.modes, batch_size=size(x,4), gpu=false)
-x = rand(Float32, 64, 128, 32, 1)
-model(x, ps, st)
-=#

@@ -88,7 +88,7 @@ end
 function gaussian_grid(n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real=1e-8)
     """
     Generate Gaussian grid with proper Gaussian latitudes using Legendre polynomials.
-    This is more accurate but requires numerical integration.
+    Returns latitudes in radians, sorted from North to South (decreasing order).
     """
     
     # Longitudes (equally spaced)
@@ -96,18 +96,18 @@ function gaussian_grid(n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real
     longitudes = range(0, 2π - lon_step, length=n_lon)
     
     # Gaussian latitudes (using Legendre polynomial roots)
-    # This approximates the Gaussian quadrature points
     latitudes = compute_gaussian_latitudes(n_lat, iters=iters, tol=tol)
     
     return latitudes, longitudes 
 end
 
-
 function compute_gaussian_latitudes(n_lat::Int; iters::Int=100, tol::Real=1e-8)
     """
     Compute Gaussian latitudes using Newton's method to find roots of Legendre polynomials.
+    Returns latitudes in radians, sorted from North to South (decreasing order).
     """
-    latitudes = zeros(n_lat)
+    # We'll store the cosine values (x) first, then convert to latitudes
+    x_values = zeros(n_lat)
     
     # Initial guesses for the roots (Chebyshev nodes as starting points)
     for i in 1:n_lat
@@ -116,17 +116,20 @@ function compute_gaussian_latitudes(n_lat::Int; iters::Int=100, tol::Real=1e-8)
         
         # Refine using Newton's method
         x = x0
-        for _ in 1:iters  # Usually converges quickly
+        for _ in 1:iters
             p, dp = legendre_polynomial(n_lat, x)
             x -= p / dp
             abs(p) < tol && break
         end
         
-        # Convert from cosine of colatitude to latitude in radians
-        latitudes[i] = asin(x)
+        x_values[i] = x
     end
     
-    return sort(latitudes)  # Return sorted from south to north
+    # Convert from cosine of colatitude to latitude in radians
+    # and sort from North Pole (π/2) to South Pole (-π/2)
+    latitudes = asin.(sort(x_values, rev=true))
+    
+    return latitudes
 end
 
 function legendre_polynomial(n::Int, x::Float64)
