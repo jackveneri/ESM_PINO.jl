@@ -154,7 +154,7 @@ function ESM_PINO.SphericalConv(
     for k in 1:corrected_modes-1
         push!(gpu_columns, [k+1, ggsh.FT_4d.i_imag+k+1]... )
     end
-    perm_plan = remap_plan(corrected_modes-1, size(ggsh.P,3)÷2, gpu=QG3.cuda_used[])
+    perm_plan = remap_plan(corrected_modes-1, size(shgg.P,3)÷2, gpu=QG3.cuda_used[])
 
 # Store in layer
 ESM_PINO.SphericalConv{ESM_PINOQG3}(hidden_channels, corrected_modes, plan, zsk, gpu_columns, perm_plan)

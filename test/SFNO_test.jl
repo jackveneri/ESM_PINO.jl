@@ -92,7 +92,7 @@ using LuxTestUtils, JLD2
             
             @testset "Forward Pass - $config_name" begin
                 layer = SFNO(qg3ppars; in_channels=hidden_channels, out_channels=hidden_channels, 
-                                    modes=modes, batch_size=batch_size, zsk=use_zsk, positional_embedding=positional_embedding)
+                                    modes=modes, batch_size=batch_size, zsk=use_zsk, positional_embedding=positional_embedding, gpu=false)
                 ps, st = Lux.setup(rng, layer)
                 
                 # Generate input matching the spherical grid dimensions
@@ -130,7 +130,7 @@ using LuxTestUtils, JLD2
             
             @testset "Backward Pass - Gradient Correctness - $config_name" begin
                 layer = SFNO(qg3ppars; in_channels=hidden_channels, out_channels=hidden_channels,
-                                    modes=modes, batch_size=batch_size, zsk=use_zsk, positional_embedding=positional_embedding)
+                                    modes=modes, batch_size=batch_size, zsk=use_zsk, positional_embedding=positional_embedding, gpu=false)
                 ps, st = Lux.setup(rng, layer)
                 
                 # Generate appropriate input dimensions

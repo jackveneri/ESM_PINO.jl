@@ -84,12 +84,12 @@ end
 function denormalize_data(data, μ, σ)
     return data .* σ .+ μ
 end
-
-function gaussian_grid(n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real=1e-8)
-    """
+"""
     Generate Gaussian grid with proper Gaussian latitudes using Legendre polynomials.
     Returns latitudes in radians, sorted from North to South (decreasing order).
-    """
+"""
+function gaussian_grid(n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real=1e-8)
+    
     
     # Longitudes (equally spaced)
     lon_step = 2π / n_lon
@@ -100,12 +100,12 @@ function gaussian_grid(n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real
     
     return latitudes, longitudes 
 end
-
-function compute_gaussian_latitudes(n_lat::Int; iters::Int=100, tol::Real=1e-8)
-    """
+"""
     Compute Gaussian latitudes using Newton's method to find roots of Legendre polynomials.
     Returns latitudes in radians, sorted from North to South (decreasing order).
-    """
+"""
+function compute_gaussian_latitudes(n_lat::Int; iters::Int=100, tol::Real=1e-8)
+    
     # We'll store the cosine values (x) first, then convert to latitudes
     x_values = zeros(n_lat)
     
@@ -131,11 +131,11 @@ function compute_gaussian_latitudes(n_lat::Int; iters::Int=100, tol::Real=1e-8)
     
     return latitudes
 end
-
-function legendre_polynomial(n::Int, x::Float64)
-    """
+"""
     Compute Legendre polynomial P_n(x) and its derivative using recurrence relation.
-    """
+"""
+function legendre_polynomial(n::Int, x::Float64)
+    
     if n == 0
         return 1.0, 0.0
     elseif n == 1

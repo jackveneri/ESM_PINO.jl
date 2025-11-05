@@ -30,7 +30,7 @@ We rely on different backends to implement Spherical Harmonics transforms, and t
 
 This is an unregistered package, we thank Maximilian Gelbrecht for providing it.
 It is AD-compatible with the Zygote backend.
-In our extension we rely on it not only to define an SFNO constructor, but also to implement different physics informed losses. To do so, we define internal types, and we therefore recommend calling such functions defining at the top of your script:
+In our extension we rely on it not only to define an SFNO constructor, but also to implement different physics informed losses. To do so, we define internal types, and we therefore recommend calling such functions via defining at the top of your script:
 
 ```julia
 using ESM_PINO, QG3
@@ -38,6 +38,7 @@ using ESM_PINO, QG3
 const ESM_PINOQG3 = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext)
 
 ```
+
 to be able to see them in the namespace. For more extensive documentation, see <https://jackveneri.github.io/ESM_PINO.jl/dev/extensions/QG3/#QG3-Extension>
 
 ### SpeedyWeather.jl

@@ -98,7 +98,7 @@ const SphericalConv = ESM_PINO.SphericalConv
                 x = randn(rng, Float32, input_dims...)
                 
                 # Test basic forward pass
-                y, st_update = Lux.apply(layer, x, ps, st)
+                y, residual, st_update = Lux.apply(layer, x, ps, st)
                 
                 # Test output shape matches input spatial dimensions
                 @test size(y) == input_dims
@@ -137,7 +137,7 @@ const SphericalConv = ESM_PINO.SphericalConv
                 
                 # Define loss function
                 function loss_fn(x, ps)
-                    y, _ = Lux.apply(layer, x, ps, st)
+                    y, _, _ = Lux.apply(layer, x, ps, st)
                     return sum(abs2, y)  # Simple L2 loss
                 end
                 

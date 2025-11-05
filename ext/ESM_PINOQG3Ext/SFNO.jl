@@ -86,9 +86,10 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
     positional_embedding::AbstractString="grid",
     inner_skip::Bool=true,
     outer_skip::Bool=true,
-    zsk=false,
+    zsk::Bool=false,
     use_norm::Bool=false,
-    downsampling_factor::Int=1
+    downsampling_factor::Int=1,
+    gpu::Bool=true
 ) 
     embedding = nothing
     if positional_embedding in ["grid","no_grid"]
@@ -130,7 +131,10 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
                 init_weight=kaiming_normal, 
                 init_bias=zeros32),
         )
-        new_modes = modes ÷ downsampling_factor 
+        new_modes = modes ÷ downsampling_factor
+        if !gpu
+            QG3.gpuoff()
+        end 
         pars_outer_layers = qg3pars_constructor_helper(new_modes, pars.N_lats)
         pars_inner_layers = qg3pars_constructor_helper(new_modes, pars.N_lats ÷ downsampling_factor)
         ggsh_outer = QG3.GaussianGridtoSHTransform(pars_outer_layers, hidden_channels, N_batch=batch_size)
@@ -256,9 +260,11 @@ function ESM_PINO.SFNO( #could become useless if I don't find a way to handle do
     positional_embedding::AbstractString="grid",
     inner_skip::Bool=true,
     outer_skip::Bool=true,
-    zsk=false,
+    zsk::Bool=false,
     use_norm::Bool=false,
-    downsampling_factor::Int=1
+    downsampling_factor::Int=1,
+    gpu::Bool=true,
+    batch_size::Int=ggsh.FT_4d.plan.input_size[4]
 )
    embedding = nothing
     if positional_embedding in ["grid","no_grid"]
@@ -304,8 +310,6 @@ function ESM_PINO.SFNO( #could become useless if I don't find a way to handle do
         QG3.gpuoff()
         safe_modes = ggsh.output_size[1]
         N_lats = shgg.output_size[1]
-        batch_size = ggsh.FT_4d.plan.input_size[4]
-        QG3.gpuon()
         # Correct modes if necessary
         corrected_modes = 0
         if modes == 0
@@ -317,6 +321,9 @@ function ESM_PINO.SFNO( #could become useless if I don't find a way to handle do
             @warn "modes ($modes) exceeds safe_modes ($(safe_modes)). Setting modes = $(safe_modes)."
         end
         new_modes = corrected_modes ÷ downsampling_factor 
+        if gpu
+            QG3.gpuon()
+        end
         pars_outer_layers = qg3pars_constructor_helper(new_modes, N_lats)
         pars_inner_layers = qg3pars_constructor_helper(new_modes, N_lats ÷ downsampling_factor)
         ggsh_outer = QG3.GaussianGridtoSHTransform(pars_outer_layers, hidden_channels, N_batch=batch_size)
