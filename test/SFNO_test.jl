@@ -74,7 +74,7 @@ using LuxTestUtils, JLD2
                 # Test direct construction with transforms
                 ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, hidden_channels; N_batch=batch_size)
                 shgg = QG3.SHtoGaussianGridTransform(qg3ppars, hidden_channels; N_batch=batch_size)
-                layer_direct = SFNO(ggsh, shgg,in_channels=hidden_channels, out_channels=hidden_channels, modes=modes, zsk=use_zsk, positional_embedding=positional_embedding)
+                layer_direct = SFNO(ggsh, shgg, batch_size=batch_size, in_channels=hidden_channels, out_channels=hidden_channels, modes=modes, zsk=use_zsk, positional_embedding=positional_embedding)
                 
                 ps_direct, st_direct = Lux.setup(rng, layer_direct)
                  # Verify parameters exist and have correct structure
