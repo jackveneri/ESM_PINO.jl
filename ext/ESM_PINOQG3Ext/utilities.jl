@@ -158,12 +158,15 @@ function train_model(
     zsk=false,
     use_norm::Bool=false,
     downsampling_factor::Int=2,
-    lr_0::Float32=0.001f0, 
-    parameters::Union{Nothing, QG3_Physics_Parameters}=nothing)
+    lr_0::Float64=1e-3, 
+    parameters::QG3_Physics_Parameters=QG3_Physics_Parameters(),
+    use_physics=true, 
+    geometric=true,
+    α=0.7f0)
     
     rng = Random.default_rng(seed)
     
-    dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> gdev
+    dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> gpu_device()
     ggsh = QG3.GaussianGridtoSHTransform(pars, N_batch=batchsize)
     shgg = QG3.SHtoGaussianGridTransform(pars, N_batch=batchsize)
     # Create the model
@@ -184,11 +187,11 @@ function train_model(
         outer_skip=outer_skip,
         zsk=zsk,
         downsampling_factor=downsampling_factor,
-        use_norm=use_norm
-    )
+        use_norm=use_norm,
+        )
 
-    ps, st = Lux.setup(rng, sfno) |> gdev
-    
+    ps, st = Lux.setup(rng, sfno) |> gpu_device()
+    @assert st isa NamedTuple "Model state should be a NamedTuple"
     # Rest of training setup remains similar
     
     opt = Optimisers.ADAM(lr_0)
@@ -196,41 +199,40 @@ function train_model(
     train_state = Training.TrainState(sfno, ps, st, opt)
     
     if !isnothing(parameters)
-        par_train = ESM_PINOQG3.QG3_Physics_Parameters(
+        par_train = QG3_Physics_Parameters(
                 parameters.dt,
                 parameters.qg3p,
                 parameters.S,
-                QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=batchsize),
-                QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=batchsize),
+                QG3.GaussianGridtoSHTransform(pars, N_batch=batchsize),
+                QG3.SHtoGaussianGridTransform(pars, N_batch=batchsize),
                 parameters.μ,
                 parameters.σ
         )
     else
         par_train = nothing
     end
-    physics_loss = ESM_PINOQG3.create_QG3_physics_loss(par_train)
-    loss_function = ESM_PINOQG3.select_QG3_loss_function(physics_loss)
-    total_loss_tracker = ntuple(_ -> Lag(Float32, 32), 1)[1]
+    QG3_loss = make_QG3_loss(par_train;geometric=geometric, use_physics=use_physics, α=α)
+    total_loss_tracker, physics_loss_tracker, data_loss_tracker = ntuple(_ -> Lag(Float32, 32), 3)
 
     iter = 1
     for (x, target_data) in Iterators.cycle(dataloader)
         Optimisers.adjust!(train_state, lr(iter))
-        _, loss, stats, train_state = Training.single_train_step!(AutoZygote(), loss_function, (x, target_data), train_state)
+        _, loss, stats, train_state = Training.single_train_step!(AutoZygote(), QG3_loss, (x, target_data), train_state)
         
         fit!(total_loss_tracker, Float32(loss))
-        #fit!(physics_loss_tracker, Float32(stats.physics_loss))
-        #fit!(data_loss_tracker, Float32(stats.data_loss))
+        fit!(physics_loss_tracker, Float32(stats.physics_loss))
+        fit!(data_loss_tracker, Float32(stats.data_loss))
 
         mean_loss = mean(OnlineStats.value(total_loss_tracker))
-        #mean_physics_loss = mean(OnlineStats.value(physics_loss_tracker))
-        #mean_data_loss = mean(OnlineStats.value(data_loss_tracker))
+        mean_physics_loss = mean(OnlineStats.value(physics_loss_tracker))
+        mean_data_loss = mean(OnlineStats.value(data_loss_tracker))
 
         isnan(loss) && throw(ArgumentError("NaN Loss Detected"))
         
-        if iter % 5 == 0 || iter == maxiters
-            #@printf "Iteration: [%5d / %5d] \t Loss: %.9f (%.9f) \t Physics Loss: %.9f \
-            #     (%.9f) \t Data Loss: %.9f (%.9f)\n" iter maxiters loss mean_loss stats.physics_loss mean_physics_loss stats.data_loss mean_data_loss
-            @printf "Iteration: [%5d / %5d] \t Loss: %.9f (%.9f) \n" iter maxiters loss mean_loss
+        if iter % 1 == 0 || iter == maxiters
+            @printf "Iteration: [%5d / %5d] \t Loss: %.9f (%.9f) \t Physics Loss: %.9f \
+                 (%.9f) \t Data Loss: %.9f (%.9f)\n" iter maxiters loss mean_loss stats.physics_loss mean_physics_loss stats.data_loss mean_data_loss
+            #@printf "Iteration: [%5d / %5d] \t Loss: %.9f (%.9f) \n" iter maxiters loss mean_loss
                         
             GC.gc()
         end
@@ -241,7 +243,7 @@ function train_model(
             break
         end
     end
-    return StatefulLuxLayer{true}(sfno, train_state.parameters, train_state.states), loss_function
+    return StatefulLuxLayer{true}(sfno, train_state.parameters, train_state.states)
 end
 
 function fine_tuning(x::AbstractArray, 
@@ -251,42 +253,47 @@ function fine_tuning(x::AbstractArray,
     st::NamedTuple;
     n_steps::Int=2,
     maxiters::Int=5, 
-    lr_0::Float32=0.00001f0, 
-    parameters::Union{Nothing, QG3_Physics_Parameters}=nothing)
+    lr_0::Float64=1e-5, 
+    parameters::QG3_Physics_Parameters=QG3_Physics_Parameters(),
+    use_physics=true,
+    geometric=true, 
+    α=0.7f0)
     batchsize = #retrieve from model
-        Base.unwrap_unionall(typeof(model.sfno_blocks.model.spherical_kernel.spherical_conv.ggsh)).parameters[end].FT_4d.plan.input_size[4]
-    dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> gdev
+        model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[4]
+    @assert length(size(target)) == 5 "Target data must have 5 dimensions (lat, lon, channel, batch, time)"
+    target = permutedims(target, (1,2,3,5,4)) # make sure target is (lat, lon, channel, time, batch)
+    @assert size(target, 4) == n_steps "Target data must be pre-computed to have the same 5th dimension size as the number of autoregressive steps computed in the loss"
+    dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> gpu_device()
 
-    ps = ps |> gdev
-    st = st |> gdev
+    ps = ps |> gpu_device()
+    st = st |> gpu_device()
     
     # Rest of training setup remains similar
     
     opt = Optimisers.ADAM(lr_0)
-    train_state = Training.TrainState(sfno, ps, st, opt)
+    train_state = Training.TrainState(model, ps, st, opt)
     
     if !isnothing(parameters)
-        par_train = ESM_PINOQG3.QG3_Physics_Parameters(
+        par_train = QG3_Physics_Parameters(
                 parameters.dt,
                 parameters.qg3p,
                 parameters.S,
-                QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=batchsize),
-                QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=batchsize),
+                QG3.GaussianGridtoSHTransform(QG3.tocpu(parameters.qg3p.p), N_batch=batchsize),
+                QG3.SHtoGaussianGridTransform(QG3.tocpu(parameters.qg3p.p), N_batch=batchsize),
                 parameters.μ,
                 parameters.σ
         )
     else
         par_train = nothing
     end
-    physics_loss = ESM_PINOQG3.create_QG3_physics_loss(par_train)
-    loss_function = ESM_PINOQG3.select_QG3_loss_function(physics_loss)
-    autoregrssive_loss = ESM_PINOQG3.autoregressive_loss(n_steps) #check arguments here
+    
+    QG3_loss = make_QG3_loss(par_train, geometric=geometric, use_physics=use_physics, α=α)
+    AR_loss = make_autoregressive_loss(QG3_loss; steps=n_steps, sequential=false)
     total_loss_tracker = ntuple(_ -> Lag(Float32, 32), 1)[1]
 
     iter = 1
     for (x, target_data) in Iterators.cycle(dataloader)
-        Optimisers.adjust!(train_state, lr(iter))
-        _, loss, stats, train_state = Training.single_train_step!(AutoZygote(), loss_function, (x, target_data), train_state)
+        _, loss, stats, train_state = Training.single_train_step!(AutoZygote(), AR_loss, (x, target_data), train_state)
         
         fit!(total_loss_tracker, Float32(loss))
         #fit!(physics_loss_tracker, Float32(stats.physics_loss))
@@ -298,7 +305,7 @@ function fine_tuning(x::AbstractArray,
 
         isnan(loss) && throw(ArgumentError("NaN Loss Detected"))
         
-        if iter % 5 == 0 || iter == maxiters
+        if iter % 1 == 0 || iter == maxiters
             #@printf "Iteration: [%5d / %5d] \t Loss: %.9f (%.9f) \t Physics Loss: %.9f \
             #     (%.9f) \t Data Loss: %.9f (%.9f)\n" iter maxiters loss mean_loss stats.physics_loss mean_physics_loss stats.data_loss mean_data_loss
             @printf "Iteration: [%5d / %5d] \t Loss: %.9f (%.9f) \n" iter maxiters loss mean_loss
@@ -312,5 +319,19 @@ function fine_tuning(x::AbstractArray,
             break
         end
     end
-    return StatefulLuxLayer{true}(sfno, train_state.parameters, train_state.states), loss_function
+    return StatefulLuxLayer{true}(model, train_state.parameters, train_state.states)
+end
+
+function stack_time_steps(data::AbstractArray{T,4}, time_steps::Int) where T
+    lat, lon, channels, batch_size = size(data)
+    n_sequences = batch_size - time_steps + 1
+    
+    # Create 5D array using comprehension
+    result = cat(
+        [data[:, :, :, i:i+time_steps-1] for i in 1:n_sequences]...,
+        dims=5
+    )
+    
+    # Permute dimensions to get the desired shape
+    return permutedims(result, (1, 2, 3, 5, 4))
 end

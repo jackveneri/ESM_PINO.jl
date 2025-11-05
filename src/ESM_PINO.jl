@@ -1,7 +1,7 @@
 module ESM_PINO
 
 using Lux, LuxCUDA, Random, Optimisers, Zygote, Statistics, MLUtils, FFTW, NNlib, ChainRulesCore, ComponentArrays, LinearAlgebra, SparseArrays
-using AbstractFFTs, Adapt, CUDA
+using AbstractFFTs, Adapt, CUDA, Printf, ParameterSchedulers, OnlineStats
 using Zygote:@adjoint 
 using DocStringExtensions
 

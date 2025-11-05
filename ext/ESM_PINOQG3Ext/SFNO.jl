@@ -130,9 +130,9 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
                 init_weight=kaiming_normal, 
                 init_bias=zeros32),
         )
-        
-        pars_outer_layers = qg3pars_constructor_helper(pars.L ÷ downsampling_factor, pars.N_lats)
-        pars_inner_layers = qg3pars_constructor_helper(pars.L ÷ downsampling_factor, pars.N_lats ÷ downsampling_factor)
+        new_modes = modes ÷ downsampling_factor 
+        pars_outer_layers = qg3pars_constructor_helper(new_modes, pars.N_lats)
+        pars_inner_layers = qg3pars_constructor_helper(new_modes, pars.N_lats ÷ downsampling_factor)
         ggsh_outer = QG3.GaussianGridtoSHTransform(pars_outer_layers, hidden_channels, N_batch=batch_size)
         shgg_outer = QG3.SHtoGaussianGridTransform(pars_outer_layers, hidden_channels, N_batch=batch_size)
         ggsh_inner = QG3.GaussianGridtoSHTransform(pars_inner_layers, hidden_channels, N_batch=batch_size)
@@ -142,7 +142,7 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
             hidden_channels, 
             ggsh_outer, 
             shgg_inner; 
-            modes=modes, 
+            modes=new_modes, 
             expansion_factor=channel_mlp_expansion, 
             activation=activation, 
             skip=inner_skip,
@@ -154,7 +154,7 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
                 hidden_channels, 
                 ggsh_inner, 
                 shgg_inner; 
-                modes=modes,
+                modes=new_modes,
                 expansion_factor=channel_mlp_expansion, 
                 activation=activation, 
                 skip=inner_skip,  
@@ -166,7 +166,7 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
             hidden_channels, 
             ggsh_inner, 
             shgg_outer; 
-            modes=modes, 
+            modes=new_modes, 
             expansion_factor=channel_mlp_expansion, 
             activation=activation, 
             skip=inner_skip, 
@@ -301,14 +301,24 @@ function ESM_PINO.SFNO( #could become useless if I don't find a way to handle do
                 init_weight=kaiming_normal, 
                 init_bias=zeros32),
         )
-        
         QG3.gpuoff()
-        L = modes
+        safe_modes = ggsh.output_size[1]
         N_lats = shgg.output_size[1]
         batch_size = ggsh.FT_4d.plan.input_size[4]
         QG3.gpuon()
-        pars_outer_layers = qg3pars_constructor_helper(L ÷ downsampling_factor, N_lats)
-        pars_inner_layers = qg3pars_constructor_helper(L ÷ downsampling_factor, N_lats ÷ downsampling_factor)
+        # Correct modes if necessary
+        corrected_modes = 0
+        if modes == 0
+            corrected_modes = safe_modes
+        else
+            corrected_modes = min(modes, safe_modes)
+        end
+        if modes > corrected_modes
+            @warn "modes ($modes) exceeds safe_modes ($(safe_modes)). Setting modes = $(safe_modes)."
+        end
+        new_modes = corrected_modes ÷ downsampling_factor 
+        pars_outer_layers = qg3pars_constructor_helper(new_modes, N_lats)
+        pars_inner_layers = qg3pars_constructor_helper(new_modes, N_lats ÷ downsampling_factor)
         ggsh_outer = QG3.GaussianGridtoSHTransform(pars_outer_layers, hidden_channels, N_batch=batch_size)
         shgg_outer = QG3.SHtoGaussianGridTransform(pars_outer_layers, hidden_channels, N_batch=batch_size)
         ggsh_inner = QG3.GaussianGridtoSHTransform(pars_inner_layers, hidden_channels, N_batch=batch_size)
@@ -318,7 +328,7 @@ function ESM_PINO.SFNO( #could become useless if I don't find a way to handle do
             hidden_channels, 
             ggsh_outer, 
             shgg_inner; 
-            modes=modes, 
+            modes=new_modes, 
             expansion_factor=channel_mlp_expansion, 
             activation=activation, 
             skip=inner_skip,
@@ -330,7 +340,7 @@ function ESM_PINO.SFNO( #could become useless if I don't find a way to handle do
                 hidden_channels, 
                 ggsh_inner, 
                 shgg_inner; 
-                modes=modes,
+                modes=new_modes,
                 expansion_factor=channel_mlp_expansion, 
                 activation=activation, 
                 skip=inner_skip,  
@@ -342,7 +352,7 @@ function ESM_PINO.SFNO( #could become useless if I don't find a way to handle do
             hidden_channels, 
             ggsh_inner, 
             shgg_outer; 
-            modes=modes, 
+            modes=new_modes, 
             expansion_factor=channel_mlp_expansion, 
             activation=activation, 
             skip=inner_skip, 

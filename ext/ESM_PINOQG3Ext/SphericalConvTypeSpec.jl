@@ -185,9 +185,11 @@ function (layer::ESM_PINO.SphericalConv{ESM_PINOQG3})(x::AbstractArray{T,4}, ps:
             x_p = ps.weight .* x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
             x_res = x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
         end
-        # Type-stable element-wise multiplication with broadcast
-        x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
-        x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
+        #if size(layer.plan.shgg.P, 2) < layer.modes || size(layer.plan.shgg.P, 3) < (2*layer.modes -1)
+        #    error("SphericalConv layer's shgg transform has insufficient size for the specified modes.")
+        #end
+        x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes -1), 0, 0))
+        x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes -1), 0, 0))
         if typeof(layer.plan.ggsh).parameters[end] == true 
             x_pad = remap_symmetric_dim(x_pad, layer.permute_plan)[1]
             x_res_pad = remap_symmetric_dim(x_res_pad, layer.permute_plan)[1]
@@ -212,8 +214,8 @@ function Lux.apply(layer::ESM_PINO.SphericalConv{ESM_PINOQG3}, x::AbstractArray{
             x_res = x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
         end
         # Type-stable element-wise multiplication with broadcast
-        x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
-        x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(x_tr, 3) - (2*layer.modes -1), 0, 0))
+        x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes -1), 0, 0))
+        x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes -1), 0, 0))
         if typeof(layer.plan.ggsh).parameters[end] == true 
             x_pad = remap_symmetric_dim(x_pad, layer.permute_plan)[1]
             x_res_pad = remap_symmetric_dim(x_res_pad, layer.permute_plan)[1]
