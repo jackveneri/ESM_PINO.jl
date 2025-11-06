@@ -84,3 +84,76 @@ end
 function denormalize_data(data, μ, σ)
     return data .* σ .+ μ
 end
+"""
+    Generate Gaussian grid with proper Gaussian latitudes using Legendre polynomials.
+    Returns latitudes in radians, sorted from North to South (decreasing order).
+"""
+function gaussian_grid(n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real=1e-8)
+    
+    
+    # Longitudes (equally spaced)
+    lon_step = 2π / n_lon
+    longitudes = range(0, 2π - lon_step, length=n_lon)
+    
+    # Gaussian latitudes (using Legendre polynomial roots)
+    latitudes = compute_gaussian_latitudes(n_lat, iters=iters, tol=tol)
+    
+    return latitudes, longitudes 
+end
+"""
+    Compute Gaussian latitudes using Newton's method to find roots of Legendre polynomials.
+    Returns latitudes in radians, sorted from North to South (decreasing order).
+"""
+function compute_gaussian_latitudes(n_lat::Int; iters::Int=100, tol::Real=1e-8)
+    
+    # We'll store the cosine values (x) first, then convert to latitudes
+    x_values = zeros(n_lat)
+    
+    # Initial guesses for the roots (Chebyshev nodes as starting points)
+    for i in 1:n_lat
+        # Initial guess using Chebyshev nodes
+        x0 = cos(π * (i - 0.5) / n_lat)
+        
+        # Refine using Newton's method
+        x = x0
+        for _ in 1:iters
+            p, dp = legendre_polynomial(n_lat, x)
+            x -= p / dp
+            abs(p) < tol && break
+        end
+        
+        x_values[i] = x
+    end
+    
+    # Convert from cosine of colatitude to latitude in radians
+    # and sort from North Pole (π/2) to South Pole (-π/2)
+    latitudes = asin.(sort(x_values, rev=true))
+    
+    return latitudes
+end
+"""
+    Compute Legendre polynomial P_n(x) and its derivative using recurrence relation.
+"""
+function legendre_polynomial(n::Int, x::Float64)
+    
+    if n == 0
+        return 1.0, 0.0
+    elseif n == 1
+        return x, 1.0
+    end
+    
+    p_prev = 1.0
+    p_curr = x
+    dp_prev = 0.0
+    dp_curr = 1.0
+    
+    for k in 2:n
+        p_next = ((2k - 1) * x * p_curr - (k - 1) * p_prev) / k
+        dp_next = ((2k - 1) * (p_curr + x * dp_curr) - (k - 1) * dp_prev) / k
+        
+        p_prev, p_curr = p_curr, p_next
+        dp_prev, dp_curr = dp_curr, dp_next
+    end
+    
+    return p_curr, dp_curr
+end

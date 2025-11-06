@@ -51,7 +51,7 @@ using LuxTestUtils, JLD2
             @testset "Initialization" begin
                 # Test construction with parameter object
                 layer = SFNO(qg3ppars; in_channels=hidden_channels, out_channels=hidden_channels,
-                                    modes=modes, batch_size=batch_size, gpu=use_gpu, zsk=use_zsk, positional_embedding=positional_embedding)
+                                    modes=modes, batch_size=batch_size, zsk=use_zsk, positional_embedding=positional_embedding)
                 
                 # Test layer properties
                 @test layer.embedding != nothing
@@ -74,7 +74,7 @@ using LuxTestUtils, JLD2
                 # Test direct construction with transforms
                 ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, hidden_channels; N_batch=batch_size)
                 shgg = QG3.SHtoGaussianGridTransform(qg3ppars, hidden_channels; N_batch=batch_size)
-                layer_direct = SFNO(ggsh, shgg,in_channels=hidden_channels, out_channels=hidden_channels, modes=modes, zsk=use_zsk, positional_embedding=positional_embedding)
+                layer_direct = SFNO(ggsh, shgg, batch_size=batch_size, in_channels=hidden_channels, out_channels=hidden_channels, modes=modes, zsk=use_zsk, positional_embedding=positional_embedding)
                 
                 ps_direct, st_direct = Lux.setup(rng, layer_direct)
                  # Verify parameters exist and have correct structure
@@ -92,7 +92,7 @@ using LuxTestUtils, JLD2
             
             @testset "Forward Pass - $config_name" begin
                 layer = SFNO(qg3ppars; in_channels=hidden_channels, out_channels=hidden_channels, 
-                                    modes=modes, batch_size=batch_size, gpu=use_gpu, zsk=use_zsk, positional_embedding=positional_embedding)
+                                    modes=modes, batch_size=batch_size, zsk=use_zsk, positional_embedding=positional_embedding, gpu=false)
                 ps, st = Lux.setup(rng, layer)
                 
                 # Generate input matching the spherical grid dimensions
@@ -130,7 +130,7 @@ using LuxTestUtils, JLD2
             
             @testset "Backward Pass - Gradient Correctness - $config_name" begin
                 layer = SFNO(qg3ppars; in_channels=hidden_channels, out_channels=hidden_channels,
-                                    modes=modes, batch_size=batch_size, gpu=use_gpu, zsk=use_zsk, positional_embedding=positional_embedding)
+                                    modes=modes, batch_size=batch_size, zsk=use_zsk, positional_embedding=positional_embedding, gpu=false)
                 ps, st = Lux.setup(rng, layer)
                 
                 # Generate appropriate input dimensions

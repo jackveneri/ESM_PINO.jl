@@ -68,16 +68,16 @@ function Lux.initialstates(rng::Random.AbstractRNG, layer::ESM_PINO.SphericalKer
 end
 
 function (layer::ESM_PINO.SphericalKernel{ESM_PINOQG3})(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
-    x_spatial, st_spatial = layer.spatial_conv(x, ps.spatial, st.spatial)
-    x_spherical, st_spherical = layer.spherical_conv(x, ps.spherical, st.spherical)
+    x_spherical, res_spherical, st_spherical = layer.spherical_conv(x, ps.spherical, st.spherical)
+    x_spatial, st_spatial = layer.spatial_conv(res_spherical, ps.spatial, st.spatial) #here I the downsampled retransformed input, could add that with no downsampling you just take the input
     x_out = layer.activation.(x_spatial .+ x_spherical)
-    return x_out, (spatial=st_spatial, spherical=st_spherical)
+    return x_out, res_spherical, (spatial=st_spatial, spherical=st_spherical)
 end
 function Lux.apply(layer::ESM_PINO.SphericalKernel{ESM_PINOQG3}, x::AbstractArray, ps::NamedTuple, st::NamedTuple)
-    x_spatial, st_spatial = layer.spatial_conv(x, ps.spatial, st.spatial)
-    x_spherical, st_spherical = layer.spherical_conv(x, ps.spherical, st.spherical)
+    x_spherical, res_spherical, st_spherical = layer.spherical_conv(x, ps.spherical, st.spherical)
+    x_spatial, st_spatial = layer.spatial_conv(res_spherical, ps.spatial, st.spatial) #here I the downsampled retransformed input, could add that with no downsampling you just take the input
     x_out = layer.activation.(x_spatial .+ x_spherical)
-    return x_out, (spatial=st_spatial, spherical=st_spherical)
+    return x_out, res_spherical, (spatial=st_spatial, spherical=st_spherical)
 end
 #=
 using JLD2, Lux, Random, QG3, NNlib, LuxCUDA, ChainRulesCore
@@ -195,7 +195,7 @@ function ESM_PINO.SFNO_Block(
     channels::Int, 
     ggsh::QG3.GaussianGridtoSHTransform, 
     shgg::QG3.SHtoGaussianGridTransform; 
-    modes::Int = ggsh.output_size[1], 
+    modes::Int = 0, 
     expansion_factor::Real=2.0, 
     activation=NNlib.gelu, 
     skip::Bool=true, 
@@ -227,22 +227,22 @@ function Lux.initialstates(rng::Random.AbstractRNG, block::ESM_PINO.SFNO_Block{E
 end
 
 function (sfno_block::ESM_PINO.SFNO_Block{ESM_PINOQG3})(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
-    x_spherical, st_spherical = sfno_block.spherical_kernel(x, ps.spherical_kernel, st.spherical_kernel)
+    x_spherical, res_spherical, st_spherical = sfno_block.spherical_kernel(x, ps.spherical_kernel, st.spherical_kernel)
     x_norm, st_norm = sfno_block.norm(x_spherical, ps.norm, st.norm)
     x_mlp, st_channel = sfno_block.channel_mlp(x_norm, ps.channel_mlp, st.channel_mlp)
     if sfno_block.skip
-        x_out = x + x_mlp
+        x_out = res_spherical + x_mlp
     else
         x_out = x_mlp
     end
     return x_out, (spherical_kernel=st_spherical, norm=st_norm, channel_mlp=st_channel)
 end
 function Lux.apply(sfno_block::ESM_PINO.SFNO_Block{ESM_PINOQG3}, x::AbstractArray, ps::NamedTuple, st::NamedTuple)
-    x_spherical, st_spherical = sfno_block.spherical_kernel(x, ps.spherical_kernel, st.spherical_kernel)
+    x_spherical, res_spherical, st_spherical = sfno_block.spherical_kernel(x, ps.spherical_kernel, st.spherical_kernel)
     x_norm, st_norm = sfno_block.norm(x_spherical, ps.norm, st.norm)
     x_mlp, st_channel = sfno_block.channel_mlp(x_norm, ps.channel_mlp, st.channel_mlp)
     if sfno_block.skip
-        x_out = x + x_mlp
+        x_out = res_spherical + x_mlp
     else
         x_out = x_mlp
     end
