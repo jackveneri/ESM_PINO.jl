@@ -33,8 +33,8 @@ Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 QG3 = "d558103f-7907-4730-8f30-3d9252e5a318"
 SpeedyWeather = "9e226e20-d153-4fed-8a5b-493def4f21a9"
 
-[sources]
-QG3 = {url = "https://github.com/maximilian-gelbrecht/QG3.jl"}
+[sources.QG3]
+url = "https://github.com/maximilian-gelbrecht/QG3.jl"
 
 [extensions]
 ESM_PINOQG3Ext = "QG3"
@@ -50,7 +50,7 @@ ComponentArrays = "0.15.26"
 DocStringExtensions = "0.9.5"
 Documenter = "1.10.2"
 FFTW = "1.8.1"
-JLD2 = "0.5.13"
+JLD2 = "0.5.13, 0.6"
 LinearAlgebra = "1.11.0"
 Lux = "1.12.4"
 LuxCUDA = "0.3.3"
