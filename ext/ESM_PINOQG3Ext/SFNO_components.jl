@@ -150,7 +150,8 @@ function ESM_PINO.SFNO_Block(
     skip::Bool=true, 
     gpu::Bool=true, 
     zsk::Bool=false,
-    use_norm::Bool=false)
+    use_norm::Bool=false,
+    soft_gating=false)
     spherical_kernel = ESM_PINO.SphericalKernel(channels, pars, activation; modes=modes, batch_size=batch_size, gpu=gpu, zsk=zsk)
     if use_norm
         # InstanceNorm expects (H, W, C, B) format by default in Lux
@@ -158,7 +159,7 @@ function ESM_PINO.SFNO_Block(
     else
         norm = Lux.NoOpLayer()
     end
-    channel_mlp = ChannelMLP(channels, expansion_factor=expansion_factor, activation=activation)
+    channel_mlp = ChannelMLP(channels, expansion_factor=expansion_factor, activation=activation, soft_gating=soft_gating)
     return ESM_PINO.SFNO_Block(spherical_kernel, norm, channel_mlp, channels, skip)
 end
 """
@@ -200,7 +201,8 @@ function ESM_PINO.SFNO_Block(
     activation=NNlib.gelu, 
     skip::Bool=true, 
     zsk::Bool=false,
-    use_norm::Bool=false)
+    use_norm::Bool=false,
+    soft_gating=false)
     spherical_kernel = ESM_PINO.SphericalKernel(channels, ggsh, shgg, activation; modes=modes, zsk=zsk)
     if use_norm
         # InstanceNorm expects (H, W, C, B) format by default in Lux
@@ -208,7 +210,7 @@ function ESM_PINO.SFNO_Block(
     else
         norm = Lux.NoOpLayer()
     end
-    channel_mlp = ChannelMLP(channels, expansion_factor=expansion_factor, activation=activation)
+    channel_mlp = ChannelMLP(channels, expansion_factor=expansion_factor, activation=activation, soft_gating=soft_gating)
     return ESM_PINO.SFNO_Block(spherical_kernel, norm, channel_mlp, channels, skip)
 end
 

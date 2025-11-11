@@ -16,7 +16,7 @@ qg3p = CUDA.@allowscalar QG3Model(qg3ppars)
 S = CUDA.@allowscalar QG3.reorder_SH_gpu(S, qg3ppars)
 
 # initial conditions for streamfunction and vorticity
-N_sims = 1000
+N_sims = 100
 @load string(root,"/data/t42_qg3_data_SH_CPU.jld2") q
 q = QG3.reorder_SH_gpu(q[:,:,:,1:N_sims+2], qg3ppars)
 solu = permutedims(QG3.transform_grid_data(q, qg3p),(2,3,1,4))
@@ -27,9 +27,9 @@ q_evolved = solu[:,:,:,2:N_sims+2]
 q_evolved = CuArray(ESM_PINO.add_noise(Array(q_evolved)))
 
 dt = 1 #QG3.p.time_unit
-maxiters = 20
-hidden_channels = 256
-batch_size = 256
+maxiters = 2000
+hidden_channels = 16
+batch_size = 10
 
 ggsh_loss = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=N_sims)
 shgg_loss = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=N_sims)    
@@ -37,7 +37,8 @@ shgg_loss = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=N_sims)
 pars = ESM_PINOQG3.QG3_Physics_Parameters(dt, qg3p, S, ggsh_loss, shgg_loss, μ, σ)
 
 trained_model = ESM_PINOQG3.train_model(q_0, q_evolved[:,:,:,1:N_sims], qg3ppars, 
-                                            maxiters=maxiters, 
+                                            maxiters=maxiters,
+                                            downsampling_factor=1, 
                                             hidden_channels=hidden_channels, 
                                             parameters=pars, 
                                             batchsize=batch_size,
@@ -60,4 +61,4 @@ fine_tuned_model = ESM_PINOQG3.fine_tuning(q_0, autoregressive_target, trained_m
 model = fine_tuned_model.model
 ps = cdev(fine_tuned_model.ps)
 st = cdev(fine_tuned_model.st)
-@save joinpath(root, "SFNO_results.jld2") model ps st
+@save joinpath(root, "models/SFNO_results.jld2") model ps st

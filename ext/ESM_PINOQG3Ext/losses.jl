@@ -24,10 +24,10 @@ function QG3_Physics_Parameters(;n_lat=32, modes=21, batch_size=1)
     geom_weights = QG3.togpu(reshape(pars.μ, 1, : , 1, 1))
     quad_weights = QG3.togpu(reshape(QG3.compute_GaussWeights(pars), :, 1, 1, 1))
     weights = geom_weights .* quad_weights
-    S = QG3.zeros_SH(pars)
+    S = CUDA.@allowscalar QG3.reorder_SH_gpu(QG3.zeros_SH(pars),pars)
     dt = σ = 1
     μ = 0
-    return QG3_Physics_Parameters(dt, qg3p,S, ggsh, shgg, μ, σ, weights)
+    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, weights)
 end 
 
 function QG3_Physics_Parameters(pars::QG3.QG3ModelParameters; batch_size=1)
@@ -37,10 +37,10 @@ function QG3_Physics_Parameters(pars::QG3.QG3ModelParameters; batch_size=1)
     geom_weights = QG3.togpu(reshape(pars.μ, :,1 , 1, 1))
     quad_weights = QG3.togpu(reshape(QG3.compute_GaussWeights(pars), :, 1, 1, 1))
     weights = geom_weights .* quad_weights
-    S = QG3.zeros_SH(pars)
+    S = CUDA.@allowscalar QG3.reorder_SH_gpu(QG3.zeros_SH(pars),pars)
     dt = σ = 1
     μ = 0
-    return QG3_Physics_Parameters(dt, qg3p,S, ggsh, shgg, μ, σ, weights) 
+    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, weights) 
 end
 
 function QG3_Physics_Parameters(dt::Real,
@@ -81,28 +81,34 @@ mse_loss_function_QG3(u, target, input) =
 
 # Geometrically weighted MSE loss
 function geometric_mse_loss_function_QG3(u, target, input, pars::QG3_Physics_Parameters)
-    w = pars.weights
-    u_pred = u(input)
-    geom_cw_loss = sqrt.(sum((@. (u_pred - target)^2 * w), dims=(2,3)) ./
-                         sum((@. u_pred^2 * w), dims=(2,3)))
-    return mean(geom_cw_loss)
+    @views begin
+        w = pars.weights
+        u_pred = u(input)
+        geom_cw_loss = sqrt.(sum((@. (u_pred - target)^2 * w), dims=(2,3)) ./
+                            sum((@. u_pred^2 * w), dims=(2,3)))
+        return mean(geom_cw_loss)    
+    end
 end
 
 # Physics-informed residual loss
 function physics_informed_loss_QG3(u, q_0, pars::QG3_Physics_Parameters)
-    q_pred = u(q_0) .* pars.σ .+ pars.μ
-    q_0_denorm = q_0 .* pars.σ .+ pars.μ
+    @views begin
+        σ = pars.σ
+        μ = pars.μ
+        q_pred = u(q_0) .* σ .+ μ
+        q_0_denorm = q_0 .* σ .+ μ
 
-    ∂u_∂t = (q_pred .- q_0_denorm) ./ pars.dt
-    ∂u_∂t = permutedims(∂u_∂t, (3, 1, 2, 4))
+        ∂u_∂t = (q_pred .- q_0_denorm) ./ pars.dt
+        ∂u_∂t = permutedims(∂u_∂t, (3, 1, 2, 4))
 
-    q_pred_SH = QG3.transform_SH(permutedims(q_pred, (3, 1, 2, 4)), pars.ggsh)
-    rhs_list = map(x -> QG3.QG3MM_gpu(x, (pars.qg3p, pars.S), (0,1)), eachslice(q_pred_SH; dims=4))
-    rhs = reduce((acc, x) -> cat(acc, x; dims=4), rhs_list)
-    rhs_grid = QG3.transform_grid(rhs, pars.shgg)
+        q_pred_SH = QG3.transform_SH(permutedims(q_pred, (3, 1, 2, 4)), pars.ggsh)
+        rhs_list = map(x -> QG3.QG3MM_gpu(x, (pars.qg3p, pars.S), (0,1)), eachslice(q_pred_SH; dims=4))
+        rhs = reduce((acc, x) -> cat(acc, x; dims=4), rhs_list)
+        rhs_grid = QG3.transform_grid(rhs, pars.shgg)
 
-    residual = ∂u_∂t .- rhs_grid
-    return mean(abs2, residual)
+        residual = ∂u_∂t .- rhs_grid
+        return mean(abs2, residual)    
+    end
 end
 
 

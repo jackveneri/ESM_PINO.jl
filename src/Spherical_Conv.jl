@@ -21,7 +21,6 @@ struct SphericalConv{T} <: AbstractSphericalConv
     plan :: T
     zsk::Bool
     gpu_cols::Vector{Int}
-    permute_plan
 end
 # Default behavior: throw or warn if used without an extension
 Lux.initialparameters(rng::AbstractRNG, layer::SphericalConv{T}) where T =

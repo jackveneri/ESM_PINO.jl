@@ -3,43 +3,36 @@ dir = @__DIR__
 using Pkg
 Pkg.activate(dir)
 Pkg.instantiate()
-using ESM_PINO, JLD2, GeoMakie, CairoMakie, Printf, Statistics, QG3, NetCDF, Dates, CFTime, Lux, CUDA, LuxCUDA, Random
+using ESM_PINO, JLD2, CairoMakie, Printf, Statistics, QG3, NetCDF, Dates, CFTime, Lux, CUDA, LuxCUDA, Random
+QG3.gpuon()
 
-gdev = gpu_device()
-cdev = cpu_device()
+const ESM_PINOQG3 = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext)
+const gdev = gpu_device()
+const cdev = cpu_device() 
 
-model_string = "SFNO_PINO"
+model_string = "SFNO"
 
 @load string(root, "/data/t42-precomputed-p.jld2") qg3ppars
 qg3ppars = qg3ppars
 qg3p = CUDA.@allowscalar QG3Model(qg3ppars)
 
-@load string(root,"/models/",model_string,"_results.jld2")  sf_plot_pred sf_plot_evolved mistake loss ps st
+@load string(root,"\\models\\",model_string,"_results.jld2") model ps st
 @load string(root,"/data/t42_qg3_data_SH_CPU.jld2") t q
 q = QG3.reorder_SH_gpu(q, qg3p.p)
 solu = permutedims(QG3.transform_grid_data(q, qg3p),(2,3,1,4))
-solu,  μ, σ = ESM_PINO.normalize_data(solu)
+solu, μ, σ = ESM_PINO.normalize_data(solu)
 
 N_test = 100
-hidden_channels = 128
 shgg2 = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=N_test)
 ggsh2 = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=N_test)
-test_model = SFNO(
-        ggsh2,
-        shgg2,
-        in_channels=3, 
-        out_channels=3, 
-        n_layers=4, 
-        hidden_channels=hidden_channels, 
-        positional_embedding="grid"
-)
+test_model = ESM_PINOQG3.transfer_SFNO_model(model, qg3ppars, batch_size=N_test)
 ps, st = gdev(ps), gdev(st)
 
 trained_u = Lux.testmode(StatefulLuxLayer{true}(test_model, ps, st))
 
 
-q_test = solu[:,:,:,1001:1100]   |> gdev
-q_test_evolved = solu[:,:,:,1002:1101]
+q_test = solu[:,:,:,1001:1100]  |> gdev
+q_test_evolved = ESM_PINO.denormalize_data(solu[:,:,:,1002:1101], μ, σ)
 
 q_test_array = (Float32.(q_test))
 GC.gc()
@@ -62,18 +55,7 @@ function apply_n_times(f, x::AbstractArray, n::Int; m::Int=0)
 
     return m > 0 ? snapshots : y
 end
-shgg3 = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=1)
-ggsh3 = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=1)
-test_model_autoreg = SFNO(
-        qg3ppars,
-        ggsh3,
-        shgg3,
-        in_channels=3, 
-        out_channels=3, 
-        n_layers=4, 
-        hidden_channels=hidden_channels, 
-        positional_embedding="grid"
-)
+test_model_autoreg = ESM_PINOQG3.transfer_SFNO_model(model,qg3ppars, batch_size=1)
 ps, st = gdev(ps), gdev(st)
 
 trained_u_autoreg = Lux.testmode(StatefulLuxLayer{true}(test_model_autoreg, ps, st))
@@ -110,38 +92,39 @@ set_theme!(my_theme, fontsize = 24, font = "Helvetica", color = :black)
 for ilvl in 1:3
         
     plot_times = 1:size(sf_plot_pred, 4)
-
+    clims = (-1.1 * maximum(abs.(sf_plot_pred[ilvl,:,:,:])),1.1 * maximum(abs.(sf_plot_pred[ilvl,:,:,:])))
     # Animation for predictions using Observables
     fig_pred = Figure()
     ax_pred = Axis(fig_pred[1, 1])
     data_obs_pred = Observable(permutedims(sf_plot_pred[ilvl,:,:,1],(2,1)))
-    hm_pred = heatmap!(ax_pred, data_obs_pred, colorrange=clims[ilvl,:], colormap=:balance)
+    hm_pred = heatmap!(ax_pred, data_obs_pred, colorrange=clims, colormap=:balance)
     Colorbar(fig_pred[1, 2], hm_pred)
     
     CairoMakie.record(fig_pred, string(root, "/figures/", model_string,"_prediction_fps20_sf_lvl$(ilvl).gif"), plot_times;
         framerate=20) do it
         # Update observable data
         data_obs_pred[] =permutedims(sf_plot_pred[ilvl,:,:,it],(2,1))
-        ax_pred.title = model_string * @sprintf(" Prediction at time = %d - %.2f d", it, it * time_scale)
+        ax_pred.title = model_string * @sprintf(" Prediction at time = %d - %.2f d", it, it * qg3ppars.time_unit)
     end
 
     # Animation for errors using Observables
     fig_err = Figure()
     ax_err = Axis(fig_err[1, 1])
     data_obs_err = Observable(permutedims(mistake[ilvl,:,:,1],(2,1)))    
-    hm_err = heatmap!(ax_err, data_obs_err, colorrange=clims[ilvl,:], colormap=:balance)
+    hm_err = heatmap!(ax_err, data_obs_err, colorrange=clims, colormap=:balance)
     Colorbar(fig_err[1, 2], hm_err)
     
     CairoMakie.record(fig_err, string(root, "/figures/", model_string ,"_error_fps20_sf_lvl$(ilvl).gif"), plot_times;
         framerate=20) do it
         # Update observable data
         data_obs_err[] = permutedims(mistake[ilvl,:,:,it],(2,1))
-        ax_err.title = model_string * @sprintf(" Error at time = %d - %.2f d", it, it * time_scale)    
+        ax_err.title = model_string * @sprintf(" Error at time = %d - %.2f d", it, it * qg3ppars.time_unit)    
     end
 
     @printf "%s Percentual Error L2 norm at level %1d: %.9f\n" model_string ilvl loss[ilvl]
 end
 sf_plot_evolved = Array(sf_plot_evolved)
+#=
 for ilvl in 1:3
     plot_times = 1:size(sf_plot_evolved, 4)
     fig_ev = Figure()
@@ -157,8 +140,8 @@ for ilvl in 1:3
         ax_ev.title = @sprintf("Evolution at time = %d - %.2f d", it, it * time_scale)
     end
 end
-
-long_rollout_iter = Int(round(20 / time_scale))
+=#
+long_rollout_iter = Int(round(20 / qg3ppars.time_unit))
 snapshots = 100
 time_scale_adjust = Int(round(long_rollout_iter / (snapshots-1)))
 q_stable = apply_n_times(trained_u_autoreg, q_test_rollout, long_rollout_iter; m=snapshots)
@@ -169,6 +152,7 @@ sf_plot_pred = Array(sf_plot_pred)
 
 for ilvl in 1:3
     plot_times = 1:size(sf_plot_pred, 4)
+    clims = (-1.1 * maximum(abs.(sf_plot_pred[ilvl,:,:,:])),1.1 * maximum(abs.(sf_plot_pred[ilvl,:,:,:])))
     fig_pred = Figure()
     ax_pred = Axis(fig_pred[1, 1])
     data_obs_pred = Observable(permutedims(sf_plot_pred[ilvl,:,:,1],(2,1)))
@@ -179,6 +163,6 @@ for ilvl in 1:3
             framerate=5) do it
             # Update observable data
             data_obs_pred[] = permutedims(sf_plot_pred[ilvl,:,:,it],(2,1))
-            ax_pred.title = model_string * @sprintf(" Prediction at time = %d - %.2f days", it, it * time_scale * time_scale_adjust)
+            ax_pred.title = model_string * @sprintf(" Prediction at time = %d - %.2f days", it, it * qg3ppars.time_unit * time_scale_adjust)
         end
     end
