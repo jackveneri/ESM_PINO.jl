@@ -44,12 +44,12 @@ function transfer_SFNO_model(model::ESM_PINO.SFNO, qg3ppars::QG3ModelParameters;
         channel_mlp_expansion=model.sfno_blocks.layers.layer_1.channel_mlp.expansion_factor,
         activation = model.sfno_blocks.layers.layer_1.spherical_kernel.activation,
         positional_embedding = model.embedding == NoOpLayer() ? "no_grid" : "grid",
-        gpu = Base.unwrap_unionall(typeof(model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.ggsh)).parameters[end],
+        gpu = Base.unwrap_unionall(typeof(model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh)).parameters[end],
         zsk = model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.zsk,
         inner_skip = model.sfno_blocks.layers.layer_1.skip,
         outer_skip = model.outer_skip,
-        use_norm= model.sfno_blocks.layer.layer_1.norm == NoOpLayer() ? false : true,
-        downsampling_factor= model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[2] ÷ model.sfno_blocks.layers.layer_2.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[2]
+        use_norm= model.sfno_blocks.layers.layer_1.norm == NoOpLayer() ? false : true,
+        #downsampling_factor= model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[2] ÷ model.sfno_blocks.layers.layer_2.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[2]
         )
     return superres_model
 end
@@ -86,112 +86,106 @@ and land-sea mask (LS).
 pars = qg3pars_constructor_helper(42, 64)
 ```
 """
-
 function qg3pars_constructor_helper(L::Int, n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real=1e-8,NF::Type{<:AbstractFloat}=Float32)
     lats, lons  = (ESM_PINO.gaussian_grid(n_lat; n_lon=n_lon, iters=iters, tol=tol))
     lats, lons = NF.(lats), NF.(lons)
     LS = h = zeros(NF, n_lat, n_lon)
     QG3ModelParameters(L, lats, lons, LS, h)
 end
+
 """
-$(TYPEDSIGNATURES)
-Precompute a symmetric remapping plan between index ranges [-l..l] and [-c..c+1).
-This is used to ensure correct ordering and slicing of spectral coefficients on gpu
+    remap_array_components(arr::AbstractArray{T,4}, l::Int, c::Int) where T
+
+Remap a 4D array from ordering (0,-1,1,-2,2,...,-l,l) to (0,1,2,...,l,...,c,-1,-2,...,-l,...,-(c-1)).
 
 # Arguments
-
--`l::Integer`: Original spectral truncation (maximum mode index).
-
--`c::Integer`: half-length of gpu-array rows.
-
--`T::Type{<:Number}=Float32`: Element type for masks and indices.
-
-# Keywords
-
-- `gpu::Bool=true`: Whether to allocate the mask on the GPU (CuArray).
+- `arr`: 4D array of size (i, j, 2l+1, k) with third dimension in order: 0,-1,1,-2,2,...,-l,l
+- `l`: Original maximum index (third dimension has 2l+1 elements)
+- `c`: New maximum index (output third dimension will have 2c elements)
 
 # Returns
+- 4D array of size (i, j, 2c, k) with reordered and padded third dimension
 
-NamedTuple with:
-
-- `remap_fixed::Vector{Int}` — Mapped indices (0 replaced with 1).
-
-- `mask::AbstractArray` — Binary mask (CPU or GPU) for valid indices.
-
-- `new_indices::Vector{Int}` — Target symmetric indices.
-
-# Example
+# Examples
 ```julia
-plan = remap_plan(42, 63; gpu=false)
+# CPU example
+arr = randn(3, 4, 5, 2)  # l=2, so 2*2+1=5
+result = remap_array_components(arr, 2, 4)  # c=4, output size (3,4,8,2)
+
+# GPU example
+arr_gpu = CuArray(randn(3, 4, 5, 2))
+result_gpu = remap_array_components(arr_gpu, 2, 4)
 ```
 """
-function remap_plan(l::Integer, c::Integer, T::Type{<:Number}=Float32; gpu::Bool=true)
-    old_indices = vcat(0, collect(1:l), collect(-1:-1:-l))
-    new_indices = vcat(0, collect(1:c), collect(-1:-1:-c+1))
-
-    remap = [findfirst(==(idx), old_indices) === nothing ? 0 : findfirst(==(idx), old_indices)
-             for idx in new_indices]
-    remap_fixed = [r == 0 ? 1 : r for r in remap]
-
-    mask_vec = T.(remap .!= 0)
-    mask = reshape(mask_vec, (1, 1, length(mask_vec), 1))
-
-    if gpu
-        mask = cu(mask)
+function remap_array_components(arr::AbstractArray{T,4}, l::Int, c::Int) where T
+    @assert c > l "c must be greater than l"
+    @assert size(arr, 3) == 2l + 1 "Third dimension must have size 2l+1"
+    
+    i, j, _, k = size(arr)
+    
+    # Create output array with zeros (compatible with GPU)
+    out = similar(arr, i, j, 2c, k)
+    fill!(out, zero(T))
+    
+    # Map from old ordering to new ordering
+    # Old: 0, -1, 1, -2, 2, ..., -l, l (indices 1 to 2l+1)
+    # New: 0, 1, 2, ..., l, ..., c, -1, -2, ..., -l, ..., -(c-1) (indices 1 to 2c)
+    
+    # Element 0: position 1 → position 1
+    out[:, :, 1, :] = arr[:, :, 1, :]
+    
+    # Positive elements: 1,2,...,l at old positions 3,5,7,...,2l+1
+    # go to new positions 2,3,...,l+1
+    for m in 1:l
+        old_idx = 2m + 1
+        new_idx = m + 1
+        out[:, :, new_idx, :] = arr[:, :, old_idx, :]
     end
-
-    (; remap_fixed, mask, new_indices)
+    
+    # Negative elements: -1,-2,...,-l at old positions 2,4,6,...,2l
+    # go to new positions c+1, c+2, ..., c+l
+    for m in 1:l
+        old_idx = 2m
+        new_idx = c + m + 1
+        out[:, :, new_idx, :] = arr[:, :, old_idx, :]
+    end
+    
+    # Positions l+2 to c and c+l+1 to 2c remain zero (padding)
+    
+    return out
 end
 
-"""
-$(TYPEDSIGNATURES)
-
-Apply a precomputed symmetric remapping plan along a given array dimension.
-Works on both CPU and GPU arrays and is compatible with Zygote for AD.
-
-# Arguments
-
--`A::AbstractArray`: Input tensor to be remapped.
-
--`plan`: Remapping structure returned by remap_plan.
-
-# Keywords
-
--`dim::Integer=3`: Dimension along which to apply the remap.
-
--`fill_value`: Optional value for indices outside the valid range. Defaults to zero(eltype(A)).
-
-# Returns
-
-- `(C, new_indices)`: Tuple with the remapped array and the list of new indices.
-
-# Example
-```julia
-plan = remap_plan(42, 63)
-A_new, idx = remap_symmetric_dim(A, plan; dim=3)
-```
-"""
-function remap_symmetric_dim(A::AbstractArray, plan; dim::Integer=3, fill_value=nothing)
-    fill_value = isnothing(fill_value) ? zero(eltype(A)) : fill_value
-
-    nd = ndims(A)
-    @assert 1 ≤ dim ≤ nd "Invalid dimension"
-
-    inds = ntuple(i -> :, nd)
-    inds = Base.setindex(inds, plan.remap_fixed, dim)
-    C = A[inds...]  # gather
-
-    # broadcast mask
-    mask = plan.mask
-    if isa(A, CuArray) && !isa(mask, CuArray)
-        mask = cu(mask)
+# Define custom reverse-mode rule for Zygote compatibility
+function Zygote.rrule(::typeof(remap_array_components), arr::AbstractArray{T,4}, l::Int, c::Int) where T
+    result = remap_array_components(arr, l, c)
+    
+    function remap_pullback(Δ)
+        # Allocate gradient for input array
+        ∇arr = similar(arr)
+        fill!(∇arr, zero(T))
+        
+        # Reverse the mapping
+        # Element 0
+        ∇arr[:, :, 1, :] = Δ[:, :, 1, :]
+        
+        # Positive elements (were at odd positions 3,5,7,...)
+        for m in 1:l
+            old_idx = 2m + 1
+            new_idx = m + 1
+            ∇arr[:, :, old_idx, :] = Δ[:, :, new_idx, :]
+        end
+        
+        # Negative elements (were at even positions 2,4,6,...)
+        for m in 1:l
+            old_idx = 2m
+            new_idx = c + m + 1
+            ∇arr[:, :, old_idx, :] = Δ[:, :, new_idx, :]
+        end
+        
+        return (NoTangent(), ∇arr, NoTangent(), NoTangent())
     end
-
-    if fill_value == zero(eltype(A))
-        return C .* mask, plan.new_indices
-    else
-        return C .* mask .+ fill_value .* (1 .- mask), plan.new_indices
-    end
+    
+    return result, remap_pullback
 end
 """
     $(TYPEDSIGNATURES)
@@ -323,7 +317,7 @@ function train_model(
     else
         par_train = nothing
     end
-    QG3_loss = make_QG3_loss(par_train;geometric=geometric, use_physics=use_physics, α=α)
+    QG3_loss = make_QG3_loss(par_train; geometric=geometric, use_physics=use_physics, α=α)
     total_loss_tracker, physics_loss_tracker, data_loss_tracker = ntuple(_ -> Lag(Float32, 32), 3)
 
     iter = 1

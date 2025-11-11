@@ -157,3 +157,27 @@ function legendre_polynomial(n::Int, x::Float64)
     
     return p_curr, dp_curr
 end
+
+function analyze_weights(ps, prefix="", indent=0)
+    indent_str = "  " ^ indent
+    
+    for (key, value) in pairs(ps)
+        current_path = isempty(prefix) ? string(key) : "$prefix.$key"
+        
+        if value isa AbstractArray && eltype(value) <: Number
+            # We've reached actual numerical arrays (weights/biases)
+            println("$(indent_str)$current_path:")
+            println("$(indent_str)  Shape: $(size(value))")
+            println("$(indent_str)  Mean: $(round(mean(value), digits=6))")
+            println("$(indent_str)  Std: $(round(std(value), digits=6))")
+            println("$(indent_str)  Min/Max: $(round(minimum(value), digits=6)) / $(round(maximum(value), digits=6))")
+            println("$(indent_str)  L2 norm: $(round(norm(value), digits=6))")
+            println("$(indent_str)  % zeros: $(round(100 * count(isapprox(0), value) / length(value), digits=2))%")
+            println()
+        elseif value isa NamedTuple || value isa Dict
+            # Recurse into nested structures
+            println("$(indent_str)$current_path/")
+            analyze_weights(value, current_path, indent + 1)
+        end
+    end
+end

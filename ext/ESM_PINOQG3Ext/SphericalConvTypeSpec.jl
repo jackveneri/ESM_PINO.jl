@@ -56,9 +56,7 @@ function ESM_PINO.SphericalConv(
         modes::Int = 0;
         zsk::Bool = false
     )
-    QG3.gpuoff()
-    safe_modes = ggsh.output_size[1]
-    QG3.gpuon()
+    safe_modes = get_truncation_from_nlat(shgg.output_size[1]) + 1
     # Correct modes if necessary
     corrected_modes = 0
     if modes == 0
@@ -69,16 +67,14 @@ function ESM_PINO.SphericalConv(
     if modes > corrected_modes
         @warn "modes ($modes) exceeds safe_modes ($(safe_modes)). Setting modes = $(safe_modes)."
     end
-    pars = qg3pars_constructor_helper(corrected_modes, shgg.output_size[1])
-    # Create the struct with the corrected value
-    plan = ESM_PINOQG3(ggsh, shgg, pars)
+    
+    plan = ESM_PINOQG3(ggsh, shgg)
     gpu_columns = [1]
     for k in 1:corrected_modes-1
-        push!(gpu_columns, [k+1, ggsh.FT_4d.i_imag+k+1]... )
+        push!(gpu_columns, [ggsh.FT_4d.i_imag+k+1,k+1]... )
     end
-    perm_plan = remap_plan(corrected_modes-1, size(shgg.P,3)÷2, gpu=QG3.cuda_used[])   
 # Store in layer
-ESM_PINO.SphericalConv{ESM_PINOQG3}(hidden_channels, corrected_modes, plan, zsk, gpu_columns, perm_plan)
+ESM_PINO.SphericalConv{ESM_PINOQG3}(hidden_channels, corrected_modes, plan, zsk, gpu_columns)
 end
 
 """
@@ -149,24 +145,23 @@ function ESM_PINO.SphericalConv(
 
     ggsh = QG3.GaussianGridtoSHTransform(pars, hidden_channels; N_batch=batch_size)
     shgg = QG3.SHtoGaussianGridTransform(pars, hidden_channels; N_batch=batch_size)
-    plan = ESM_PINOQG3(ggsh, shgg, pars)
+    plan = ESM_PINOQG3(ggsh, shgg)
     gpu_columns = [1]
     for k in 1:corrected_modes-1
-        push!(gpu_columns, [k+1, ggsh.FT_4d.i_imag+k+1]... )
+        push!(gpu_columns, [ggsh.FT_4d.i_imag+k+1,k+1]... )
     end
-    perm_plan = remap_plan(corrected_modes-1, size(shgg.P,3)÷2, gpu=QG3.cuda_used[])
 
 # Store in layer
-ESM_PINO.SphericalConv{ESM_PINOQG3}(hidden_channels, corrected_modes, plan, zsk, gpu_columns, perm_plan)
+ESM_PINO.SphericalConv{ESM_PINOQG3}(hidden_channels, corrected_modes, plan, zsk, gpu_columns)
 end
 
 function Lux.initialparameters(rng::Random.AbstractRNG, layer::ESM_PINO.SphericalConv{ESM_PINOQG3})
     init_std = typeof(layer.plan.ggsh).parameters[1](sqrt(2 / layer.hidden_channels))
     # Initialize 2D weights for spatial pattern (L × M)
     if layer.zsk == true
-        weight = init_std * randn(rng, typeof(layer.plan.ggsh).parameters[1], 1, layer.modes, 1, 1)
+        weight = init_std * randn(rng, typeof(layer.plan.ggsh).parameters[1], layer.hidden_channels, layer.modes, 1, 1)
     else
-        weight = init_std * randn(rng, typeof(layer.plan.ggsh).parameters[1], 1, layer.modes, 2 * layer.modes - 1, 1)
+        weight = init_std * randn(rng, typeof(layer.plan.ggsh).parameters[1], layer.hidden_channels, layer.modes, 2 * layer.modes - 1, 1)
     end
     return (weight=weight,)
 end
@@ -178,21 +173,22 @@ function (layer::ESM_PINO.SphericalConv{ESM_PINOQG3})(x::AbstractArray{T,4}, ps:
     @views begin
         x_perm = permutedims(x, (3, 1, 2, 4))  # [channels, lat, lon, batch]
         x_tr = QG3.transform_SH(x_perm, layer.plan.ggsh)
-        if typeof(layer.plan.ggsh).parameters[end] == true
+        if typeof(layer.plan.ggsh).parameters[end] == true 
+            # For x_p: extract, multiply by weights, remap, and pad
             x_p = ps.weight .* x_tr[:, 1:layer.modes, layer.gpu_cols, :]
+            x_p = remap_array_components(x_p, layer.modes-1, size(layer.plan.shgg.P,3)÷2)
+            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, 0, 0, 0))
+            
+            # For x_res: extract, remap (no weights!), and pad to get original structure back
             x_res = x_tr[:, 1:layer.modes, layer.gpu_cols, :]
+            x_res = remap_array_components(x_res, layer.modes-1, size(layer.plan.shgg.P,3)÷2)
+            x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, 0, 0, 0))
         else
+            # CPU path remains the same
             x_p = ps.weight .* x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
             x_res = x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
-        end
-        #if size(layer.plan.shgg.P, 2) < layer.modes || size(layer.plan.shgg.P, 3) < (2*layer.modes -1)
-        #    error("SphericalConv layer's shgg transform has insufficient size for the specified modes.")
-        #end
-        x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes -1), 0, 0))
-        x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes -1), 0, 0))
-        if typeof(layer.plan.ggsh).parameters[end] == true 
-            x_pad = remap_symmetric_dim(x_pad, layer.permute_plan)[1]
-            x_res_pad = remap_symmetric_dim(x_res_pad, layer.permute_plan)[1]
+            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes -1), 0, 0))
+            x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes -1), 0, 0))
         end
         x_out = QG3.transform_grid(x_pad, layer.plan.shgg)
         res_out = QG3.transform_grid(x_res_pad, layer.plan.shgg)
@@ -206,19 +202,22 @@ function Lux.apply(layer::ESM_PINO.SphericalConv{ESM_PINOQG3}, x::AbstractArray{
     @views begin
         x_perm = permutedims(x, (3, 1, 2, 4))  # [channels, lat, lon, batch]
         x_tr = QG3.transform_SH(x_perm, layer.plan.ggsh)
-        if typeof(layer.plan.ggsh).parameters[end] == true
+        if typeof(layer.plan.ggsh).parameters[end] == true 
+            # For x_p: extract, multiply by weights, remap, and pad
             x_p = ps.weight .* x_tr[:, 1:layer.modes, layer.gpu_cols, :]
+            x_p = remap_array_components(x_p, layer.modes-1, size(layer.plan.shgg.P,3)÷2)
+            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, 0, 0, 0))
+
+            # For x_res: extract, remap (no weights!), and pad to get original structure back
             x_res = x_tr[:, 1:layer.modes, layer.gpu_cols, :]
+            x_res = remap_array_components(x_res, layer.modes-1, size(layer.plan.shgg.P,3)÷2)
+            x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, 0, 0, 0))
         else
+            # CPU path remains the same
             x_p = ps.weight .* x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
             x_res = x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
-        end
-        # Type-stable element-wise multiplication with broadcast
-        x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes -1), 0, 0))
-        x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes -1), 0, 0))
-        if typeof(layer.plan.ggsh).parameters[end] == true 
-            x_pad = remap_symmetric_dim(x_pad, layer.permute_plan)[1]
-            x_res_pad = remap_symmetric_dim(x_res_pad, layer.permute_plan)[1]
+            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes -1), 0, 0))
+            x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes -1), 0, 0))
         end
         x_out = QG3.transform_grid(x_pad, layer.plan.shgg)
         res_out = QG3.transform_grid(x_res_pad, layer.plan.shgg)

@@ -89,7 +89,8 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
     zsk::Bool=false,
     use_norm::Bool=false,
     downsampling_factor::Int=1,
-    gpu::Bool=true
+    gpu::Bool=true,
+    soft_gating=false
 ) 
     embedding = nothing
     if positional_embedding in ["grid","no_grid"]
@@ -151,7 +152,8 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
             activation=activation, 
             skip=inner_skip,
             zsk=zsk,
-            use_norm=use_norm)
+            use_norm=use_norm,
+            soft_gating=soft_gating)
         push!(blocks, block1)
         for i in 2:n_layers-1
             blocki = ESM_PINO.SFNO_Block(
@@ -163,7 +165,8 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
                 activation=activation, 
                 skip=inner_skip,  
                 zsk=zsk,
-                use_norm=use_norm)
+                use_norm=use_norm,
+                soft_gating=soft_gating)
             push!(blocks, blocki)
         end
         final_block = ESM_PINO.SFNO_Block(
@@ -175,10 +178,11 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
             activation=activation, 
             skip=inner_skip, 
             zsk=zsk,
-            use_norm=use_norm)
+            use_norm=use_norm,
+            soft_gating=soft_gating)
         push!(blocks, final_block)
         sfno_blocks = Lux.Chain(blocks...)
-        plan = ESM_PINOQG3(ggsh_outer, shgg_outer, pars_inner_layers) #dummy plan to satisfy type parameter
+        plan = ESM_PINOQG3(ggsh_outer, shgg_outer) #dummy plan to satisfy type parameter
     else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'no_grid'."))
     end
@@ -245,10 +249,10 @@ using Zygote
 gr = Zygote.gradient(ps -> sum(model2(x, ps, st)[1]), ps)
 ```
 """
-function ESM_PINO.SFNO( #could become useless if I don't find a way to handle downsampling
+function ESM_PINO.SFNO( 
     ggsh::QG3.GaussianGridtoSHTransform,
     shgg::QG3.SHtoGaussianGridTransform;
-    modes::Int=ggsh.output_size[1],
+    modes::Int=get_truncation_from_nlat(shgg.output_size[1]) + 1,
     in_channels::Int=3,
     out_channels::Int=3,
     hidden_channels::Int=32,
@@ -264,7 +268,8 @@ function ESM_PINO.SFNO( #could become useless if I don't find a way to handle do
     use_norm::Bool=false,
     downsampling_factor::Int=1,
     gpu::Bool=true,
-    batch_size::Int=ggsh.FT_4d.plan.input_size[4]
+    batch_size::Int=typeof(ggsh).parameters[end] ? ggsh.FT_4d.plan.input_size[4] : ggsh.FT_4d.plan.sz[4],
+    soft_gating=false
 )
    embedding = nothing
     if positional_embedding in ["grid","no_grid"]
@@ -307,8 +312,7 @@ function ESM_PINO.SFNO( #could become useless if I don't find a way to handle do
                 init_weight=kaiming_normal, 
                 init_bias=zeros32),
         )
-        QG3.gpuoff()
-        safe_modes = ggsh.output_size[1]
+        safe_modes = get_truncation_from_nlat(shgg.output_size[1]) + 1
         N_lats = shgg.output_size[1]
         # Correct modes if necessary
         corrected_modes = 0
@@ -323,6 +327,8 @@ function ESM_PINO.SFNO( #could become useless if I don't find a way to handle do
         new_modes = corrected_modes ÷ downsampling_factor 
         if gpu
             QG3.gpuon()
+        else
+            QG3.gpuoff()
         end
         pars_outer_layers = qg3pars_constructor_helper(new_modes, N_lats)
         pars_inner_layers = qg3pars_constructor_helper(new_modes, N_lats ÷ downsampling_factor)
@@ -340,7 +346,8 @@ function ESM_PINO.SFNO( #could become useless if I don't find a way to handle do
             activation=activation, 
             skip=inner_skip,
             zsk=zsk,
-            use_norm=use_norm)
+            use_norm=use_norm,
+            soft_gating=soft_gating)
         push!(blocks, block1)
         for i in 2:n_layers-1
             blocki = ESM_PINO.SFNO_Block(
@@ -352,7 +359,8 @@ function ESM_PINO.SFNO( #could become useless if I don't find a way to handle do
                 activation=activation, 
                 skip=inner_skip,  
                 zsk=zsk,
-                use_norm=use_norm)
+                use_norm=use_norm,
+                soft_gating=soft_gating)
             push!(blocks, blocki)
         end
         final_block = ESM_PINO.SFNO_Block(
@@ -364,10 +372,11 @@ function ESM_PINO.SFNO( #could become useless if I don't find a way to handle do
             activation=activation, 
             skip=inner_skip, 
             zsk=zsk,
-            use_norm=use_norm)
+            use_norm=use_norm,
+            soft_gating=soft_gating)
         push!(blocks, final_block)
         sfno_blocks = Lux.Chain(blocks...)
-        plan = ESM_PINOQG3(ggsh, shgg, pars_inner_layers) #dummy plan to satisfy type parameter    
+        plan = ESM_PINOQG3(ggsh, shgg) #dummy plan to satisfy type parameter    
     else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid' and 'no_grid'."))
     end
