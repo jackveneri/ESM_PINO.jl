@@ -64,9 +64,9 @@ const SphericalConv = ESM_PINO.SphericalConv
                 # Verify parameters exist and have correct structure
                 @test haskey(ps, :weight)
                 if use_zsk
-                    @test size(ps.weight) == (1, layer.modes, 1, 1)
+                    @test size(ps.weight) == (hidden_channels, layer.modes, 1, 1)
                 else
-                    @test size(ps.weight) == (1, layer.modes, 2 * layer.modes - 1, 1)
+                    @test size(ps.weight) == (hidden_channels, layer.modes, 2 * layer.modes - 1, 1)
                 end
                 
                 # Verify state is properly initialized (should be empty NamedTuple)

@@ -64,32 +64,225 @@ function add_noise(data::AbstractArray;
 end
 
 """
-    normalize_data(data)
+    normalize_data(data; channelwise=false, dims=nothing)
 
-Normalize an array to zero mean and unit variance.
+Normalize data using mean and standard deviation.
+
 # Arguments
--`data`: Input array.
+- `data::AbstractArray`: Input data to normalize
+
+# Keyword Arguments
+- `channelwise::Bool=false`: If true, normalize each channel independently
+- `dims::Union{Nothing, Int, Tuple}=nothing`: Dimensions to compute statistics over.
+  If `nothing`, behavior depends on `channelwise` and data shape.
+
 # Returns
--`(normalized_data, μ, σ):` A tuple containing:
-    normalized_data: The normalized array.
-    μ: The mean of the original data.
-    σ: The standard deviation of the original data.
+- Normalized data, mean(s), std(s)
+
+# Details
+When `channelwise=true`:
+- Attempts to detect 4D format (lat, lon, channel, batch)
+- Computes per-channel statistics across spatial and batch dimensions
+- Returns vectors of means and stds (one per channel)
+
+When `channelwise=false`:
+- Computes global statistics across all dimensions
+- Returns scalar mean and std
+
+# Examples
+```julia
+# Global normalization
+data_norm, μ, σ = normalize_data(data)
+
+# Channel-wise normalization (4D data)
+data = randn(Float32, 48, 96, 5, 32)  # (lat, lon, channels, batch)
+data_norm, μ_vec, σ_vec = normalize_data(data, channelwise=true)
+
+# Custom dimensions
+data_norm, μ, σ = normalize_data(data, dims=(1, 2, 4))  # Over lat, lon, batch
+```
 """
-function normalize_data(data)
-    μ = mean(data)
-    σ = std(data)
-    return (data .- μ) ./ σ, μ, σ
+function normalize_data(data::AbstractArray; channelwise::Bool=false, dims::Union{Nothing, Int, Tuple}=nothing)
+    
+    if channelwise
+        # Try to detect if data is in (lat, lon, channel, batch) format
+        ndims_data = ndims(data)
+        
+        if ndims_data == 4
+            # Assume format: (lat, lon, channel, batch)
+            n_channels = size(data, 3)
+            
+            # Compute mean and std for each channel across spatial and batch dimensions
+            μ = zeros(eltype(data), n_channels)
+            σ = zeros(eltype(data), n_channels)
+            
+            normalized_data = similar(data)
+            
+            for c in 1:n_channels
+                # Extract channel c across all spatial locations and batches
+                channel_data = selectdim(data, 3, c)
+                
+                # Compute statistics over spatial (lat, lon) and batch dimensions
+                μ[c] = mean(channel_data)
+                σ[c] = std(channel_data)
+                
+                # Avoid division by zero
+                if σ[c] < eps(eltype(data))
+                    @warn "Channel $c has near-zero std ($(σ[c])). Setting std to 1.0 to avoid division by zero."
+                    σ[c] = one(eltype(data))
+                end
+                
+                # Normalize this channel
+                normalized_channel = (channel_data .- μ[c]) ./ σ[c]
+                selectdim(normalized_data, 3, c) .= normalized_channel
+            end
+            
+            return normalized_data, μ, σ
+            
+        elseif ndims_data == 3
+            # Could be (lat, lon, channel) or (channel, height, width)
+            # Try to guess: if last dimension is smallest, it's likely channels
+            sizes = size(data)
+            if sizes[3] < minimum(sizes[1:2])
+                # Assume (lat, lon, channel) format
+                n_channels = sizes[3]
+                
+                μ = zeros(eltype(data), n_channels)
+                σ = zeros(eltype(data), n_channels)
+                normalized_data = similar(data)
+                
+                for c in 1:n_channels
+                    channel_data = selectdim(data, 3, c)
+                    μ[c] = mean(channel_data)
+                    σ[c] = std(channel_data)
+                    
+                    if σ[c] < eps(eltype(data))
+                        @warn "Channel $c has near-zero std ($(σ[c])). Setting std to 1.0."
+                        σ[c] = one(eltype(data))
+                    end
+                    
+                    normalized_channel = (channel_data .- μ[c]) ./ σ[c]
+                    selectdim(normalized_data, 3, c) .= normalized_channel
+                end
+                
+                return normalized_data, μ, σ
+            else
+                @warn "3D data format unclear. Falling back to global normalization. Use dims argument for custom behavior."
+                channelwise = false
+            end
+        else
+            @warn "Channel-wise normalization requested but data has $ndims_data dimensions. Expected 3 or 4. Falling back to global normalization."
+            channelwise = false
+        end
+    end
+    
+    # Global normalization (or fallback)
+    if !isnothing(dims)
+        # Custom dimensions specified
+        μ = mean(data, dims=dims)
+        σ = std(data, dims=dims)
+        
+        # Avoid division by zero
+        σ = replace(x -> x < eps(eltype(data)) ? one(eltype(data)) : x, σ)
+        
+        return (data .- μ) ./ σ, μ, σ
+    else
+        # Global statistics
+        μ = mean(data)
+        σ = std(data)
+        
+        if σ < eps(eltype(data))
+            @warn "Data has near-zero std ($σ). Setting std to 1.0."
+            σ = one(eltype(data))
+        end
+        
+        return (data .- μ) ./ σ, μ, σ
+    end
 end
 
-function denormalize_data(data, μ, σ)
-    return data .* σ .+ μ
+"""
+    denormalize_data(normalized_data, μ, σ; channelwise=false)
+
+Reverse the normalization applied by `normalize_data`.
+
+# Arguments
+- `normalized_data::AbstractArray`: Normalized data
+- `μ`: Mean(s) used for normalization (scalar or vector)
+- `σ`: Std(s) used for normalization (scalar or vector)
+
+# Keyword Arguments
+- `channelwise::Bool=false`: Must match the mode used during normalization
+
+# Returns
+- Original scale data
+
+# Examples
+```julia
+# Global denormalization
+data_original = denormalize_data(data_norm, μ, σ)
+
+# Channel-wise denormalization
+data_original = denormalize_data(data_norm, μ_vec, σ_vec, channelwise=true)
+```
+"""
+function denormalize_data(normalized_data::AbstractArray, μ, σ; channelwise::Bool=false)
+    
+    if channelwise
+        # μ and σ should be vectors
+        if !(μ isa AbstractVector && σ isa AbstractVector)
+            throw(ArgumentError("For channelwise denormalization, μ and σ must be vectors"))
+        end
+        
+        ndims_data = ndims(normalized_data)
+        
+        if ndims_data == 4
+            # (lat, lon, channel, batch) format
+            n_channels = size(normalized_data, 3)
+            
+            if length(μ) != n_channels || length(σ) != n_channels
+                throw(ArgumentError("μ and σ length ($(length(μ))) must match number of channels ($n_channels)"))
+            end
+            
+            denormalized_data = similar(normalized_data)
+            
+            for c in 1:n_channels
+                channel_data = selectdim(normalized_data, 3, c)
+                denormalized_channel = channel_data .* σ[c] .+ μ[c]
+                selectdim(denormalized_data, 3, c) .= denormalized_channel
+            end
+            
+            return denormalized_data
+            
+        elseif ndims_data == 3
+            # (lat, lon, channel) format
+            n_channels = size(normalized_data, 3)
+            
+            if length(μ) != n_channels || length(σ) != n_channels
+                throw(ArgumentError("μ and σ length must match number of channels"))
+            end
+            
+            denormalized_data = similar(normalized_data)
+            
+            for c in 1:n_channels
+                channel_data = selectdim(normalized_data, 3, c)
+                denormalized_channel = channel_data .* σ[c] .+ μ[c]
+                selectdim(denormalized_data, 3, c) .= denormalized_channel
+            end
+            
+            return denormalized_data
+        else
+            throw(ArgumentError("Channel-wise denormalization expects 3D or 4D data"))
+        end
+    else
+        # Global denormalization
+        return normalized_data .* σ .+ μ
+    end
 end
 """
     Generate Gaussian grid with proper Gaussian latitudes using Legendre polynomials.
     Returns latitudes in radians, sorted from North to South (decreasing order).
 """
-function gaussian_grid(n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real=1e-8)
-    
+function gaussian_grid(n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real=1e-10)
     
     # Longitudes (equally spaced)
     lon_step = 2π / n_lon
@@ -100,42 +293,48 @@ function gaussian_grid(n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real
     
     return latitudes, longitudes 
 end
+
 """
     Compute Gaussian latitudes using Newton's method to find roots of Legendre polynomials.
     Returns latitudes in radians, sorted from North to South (decreasing order).
 """
-function compute_gaussian_latitudes(n_lat::Int; iters::Int=100, tol::Real=1e-8)
+function compute_gaussian_latitudes(n_lat::Int; iters::Int=100, tol::Real=1e-10)
+    n = n_lat
     
-    # We'll store the cosine values (x) first, then convert to latitudes
-    x_values = zeros(n_lat)
+    # Use the standard approach for Gaussian latitudes
+    x_values = zeros(Float64, n)
     
-    # Initial guesses for the roots (Chebyshev nodes as starting points)
-    for i in 1:n_lat
-        # Initial guess using Chebyshev nodes
-        x0 = cos(π * (i - 0.5) / n_lat)
+    # Initial guesses - more accurate starting points
+    for i in 1:n
+        # Better initial guess using cosine of adjusted angle
+        x0 = cos(π * (i - 0.25) / (n + 0.5))
         
         # Refine using Newton's method
         x = x0
-        for _ in 1:iters
-            p, dp = legendre_polynomial(n_lat, x)
-            x -= p / dp
-            abs(p) < tol && break
+        for iter in 1:iters
+            p, dp = legendre_polynomial(n, x)
+            delta = p / dp
+            x -= delta
+            if abs(delta) < tol
+                break
+            end
         end
         
         x_values[i] = x
     end
     
     # Convert from cosine of colatitude to latitude in radians
-    # and sort from North Pole (π/2) to South Pole (-π/2)
+    # and ensure proper ordering from North Pole to South Pole
     latitudes = asin.(sort(x_values, rev=true))
     
     return latitudes
 end
+
 """
     Compute Legendre polynomial P_n(x) and its derivative using recurrence relation.
+    This uses the standard normalization where P_n(1) = 1.
 """
 function legendre_polynomial(n::Int, x::Float64)
-    
     if n == 0
         return 1.0, 0.0
     elseif n == 1
@@ -148,6 +347,7 @@ function legendre_polynomial(n::Int, x::Float64)
     dp_curr = 1.0
     
     for k in 2:n
+        # Recurrence relation for Legendre polynomials
         p_next = ((2k - 1) * x * p_curr - (k - 1) * p_prev) / k
         dp_next = ((2k - 1) * (p_curr + x * dp_curr) - (k - 1) * dp_prev) / k
         
@@ -171,7 +371,7 @@ function analyze_weights(ps, prefix="", indent=0)
             println("$(indent_str)  Mean: $(round(mean(value), digits=6))")
             println("$(indent_str)  Std: $(round(std(value), digits=6))")
             println("$(indent_str)  Min/Max: $(round(minimum(value), digits=6)) / $(round(maximum(value), digits=6))")
-            println("$(indent_str)  L2 norm: $(round(norm(value), digits=6))")
+            println("$(indent_str)  L2 norm: $(round(norm(value)/sqrt(length(value)), digits=6))")
             println("$(indent_str)  % zeros: $(round(100 * count(isapprox(0), value) / length(value), digits=2))%")
             println()
         elseif value isa NamedTuple || value isa Dict
@@ -180,4 +380,19 @@ function analyze_weights(ps, prefix="", indent=0)
             analyze_weights(value, current_path, indent + 1)
         end
     end
+end
+
+function apply_n_times(f, x::AbstractArray, n::Int; m::Int=0, μ=0.0,  σ=1.0)
+    y = x
+    snapshots = m > 0 ? Vector{typeof(x)}() : nothing
+    save_steps = m > 0 ? round.(Int, range(1, n; length=m)) : Int[]
+    
+    for i in 1:n
+        y = f(y)
+        if i in save_steps
+            push!(snapshots, copy(y) .* σ .+ μ)
+        end
+    end
+
+    return m > 0 ? snapshots : y
 end

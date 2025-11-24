@@ -229,11 +229,11 @@ struct ChannelMLP{M,S} <: Lux.AbstractLuxLayer
     expansion_factor::Number
 end
 
-function ChannelMLP(channels::Int; expansion_factor=2.0, activation=NNlib.gelu, soft_gating=true)
+function ChannelMLP(channels::Int; expansion_factor=2.0, activation=NNlib.gelu, soft_gating=true, bias=false)
     hidden_ch = Int(expansion_factor * channels)
     mlp = Chain(
         Conv((1, 1), channels => hidden_ch, activation, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
-        Conv((1, 1), hidden_ch => channels, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32)
+        Conv((1, 1), hidden_ch => channels, identity, cross_correlation=true, init_weight=kaiming_normal, use_bias=bias, init_bias=zeros32)
     )
     if soft_gating
         skip = SoftGating(channels)
@@ -259,7 +259,11 @@ end
 function (layer::ChannelMLP)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     y_mlp, st_mlp = layer.mlp(x, ps.mlp, st.mlp)
     y_skip, st_skip = layer.skip(x, ps.skip, st.skip)
-    return y_mlp + y_skip, (mlp=st_mlp, skip=st_skip)
+    if layer.skip != Lux.NoOpLayer()
+        return y_mlp + y_skip, (mlp=st_mlp, skip=st_skip)
+    else
+        return y_mlp, (mlp=st_mlp, skip=st_skip)
+    end
 end
 
 """

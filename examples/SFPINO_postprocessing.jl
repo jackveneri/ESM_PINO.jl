@@ -10,7 +10,7 @@ const ESM_PINOQG3 = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext)
 const gdev = gpu_device()
 const cdev = cpu_device() 
 
-model_string = "SFNO"
+model_string = "SFPINO"
 GC.gc()
 CUDA.reclaim()
 

@@ -19,7 +19,7 @@ struct SphericalConv{T} <: AbstractSphericalConv
     hidden_channels::Int
     modes::Int
     plan :: T
-    zsk::Bool
+    operator_type::Symbol
     gpu_cols::Vector{Int}
 end
 # Default behavior: throw or warn if used without an extension

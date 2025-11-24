@@ -21,26 +21,26 @@ function QG3_Physics_Parameters(;n_lat=32, modes=21, batch_size=1)
     ggsh = QG3.GaussianGridtoSHTransform(pars, N_batch=batch_size)
     shgg = QG3.SHtoGaussianGridTransform(pars, N_batch=batch_size)
     qg3p = CUDA.@allowscalar QG3Model(pars)
-    geom_weights = QG3.togpu(reshape(pars.μ, 1, : , 1, 1))
+    #geom_weights = QG3.togpu(reshape(pars.μ, 1, : , 1, 1))
     quad_weights = QG3.togpu(reshape(QG3.compute_GaussWeights(pars), :, 1, 1, 1))
-    weights = geom_weights .* quad_weights
+    #weights = geom_weights .* quad_weights
     S = CUDA.@allowscalar QG3.reorder_SH_gpu(QG3.zeros_SH(pars),pars)
     dt = σ = 1
     μ = 0
-    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, weights)
+    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, quad_weights)
 end 
 
 function QG3_Physics_Parameters(pars::QG3.QG3ModelParameters; batch_size=1)
     ggsh = QG3.GaussianGridtoSHTransform(pars, N_batch=batch_size)
     shgg = QG3.SHtoGaussianGridTransform(pars, N_batch=batch_size)
     qg3p = CUDA.@allowscalar QG3Model(pars)
-    geom_weights = QG3.togpu(reshape(pars.μ, :,1 , 1, 1))
+    #geom_weights = QG3.togpu(reshape(pars.μ, :,1 , 1, 1))
     quad_weights = QG3.togpu(reshape(QG3.compute_GaussWeights(pars), :, 1, 1, 1))
-    weights = geom_weights .* quad_weights
+    #weights = geom_weights .* quad_weights
     S = CUDA.@allowscalar QG3.reorder_SH_gpu(QG3.zeros_SH(pars),pars)
     dt = σ = 1
     μ = 0
-    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, weights) 
+    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, quad_weights) 
 end
 
 function QG3_Physics_Parameters(dt::Real,
@@ -52,11 +52,11 @@ function QG3_Physics_Parameters(dt::Real,
     ggsh = QG3.GaussianGridtoSHTransform(qg3p.p, N_batch=batch_size)
     shgg = QG3.SHtoGaussianGridTransform(qg3p.p, N_batch=batch_size)
 
-    geom_weights = QG3.togpu(reshape(qg3p.p.μ, :, 1, 1, 1))
-    quad_weights = QG3.togpu(reshape(QG3.compute_GaussWeights(qg3p.p), 1, :, 1, 1))
-    weights = geom_weights .* quad_weights
+    #geom_weights = QG3.togpu(reshape(qg3p.p.μ, :, 1, 1, 1))
+    quad_weights = QG3.togpu(reshape(QG3.compute_GaussWeights(qg3p.p), :, 1, 1, 1))
+    #weights = geom_weights .* quad_weights
 
-    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, weights)
+    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, quad_weights)
 end
 
 function QG3_Physics_Parameters(dt::Real,
@@ -66,10 +66,10 @@ function QG3_Physics_Parameters(dt::Real,
     shgg::QG3.SHtoGaussianGridTransform,
     μ::Real,
     σ::Real)
-    geom_weights = QG3.togpu(reshape(qg3p.p.μ, :, 1, 1, 1))
+    #geom_weights = QG3.togpu(reshape(qg3p.p.μ, :, 1, 1, 1))
     quad_weights = QG3.togpu(reshape(QG3.compute_GaussWeights(qg3p.p), :, 1, 1, 1))
-    weights = geom_weights .* quad_weights
-    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, weights)
+    #weights = geom_weights .* quad_weights
+    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, quad_weights)
 end
 ############################
 # Base Loss Components
@@ -84,9 +84,9 @@ function geometric_mse_loss_function_QG3(u, target, input, pars::QG3_Physics_Par
     @views begin
         w = pars.weights
         u_pred = u(input)
-        geom_cw_loss = sqrt.(sum((@. (u_pred - target)^2 * w), dims=(2,3)) ./
-                            sum((@. u_pred^2 * w), dims=(2,3)))
-        return mean(geom_cw_loss)    
+        geom_cw_loss = sqrt.(sum(@.((u_pred - target)^2 * w), dims=(1,2)) ./
+                            sum(@.( target^2 * w), dims=(1,2)))
+        return sum(geom_cw_loss) / length(geom_cw_loss)    
     end
 end
 
@@ -195,10 +195,10 @@ function make_autoregressive_loss(QG3_loss::Function; steps::Int, sequential::Bo
             end
         total_loss /= steps
         else
-            preds = (u_t1,)
+            preds = (u_t1,) #rewrite for case where you have different in_channels and out_channels
             for step in 2:steps
                 next_pred = u_net(preds[end])
-                preds = (preds..., next_pred)
+                preds = (preds..., next_pred) 
             end
             
             preds_stack = permutedims(cat(preds..., dims=5),(1,2,3,5,4))

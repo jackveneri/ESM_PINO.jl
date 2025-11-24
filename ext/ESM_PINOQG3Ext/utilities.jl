@@ -32,23 +32,26 @@ ŷ = new_model(x, ps, st)
 function transfer_SFNO_model(model::ESM_PINO.SFNO, qg3ppars::QG3ModelParameters; 
     batch_size::Int=model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[4]
 )
+    projection_layers = model.projection.layers
+    last_layer_index = length(projection_layers)  # or fieldcount(typeof(projection_layers))
+    out_channels = projection_layers[last_layer_index].out_chs
     superres_model = SFNO(qg3ppars,
         batch_size = batch_size,
         modes = model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.modes,
         in_channels = model.lifting.layers.layer_1.in_chs,
-        out_channels = model.projection.layers.layer_2.out_chs, #watch out as you might have more than 2 layers
+        out_channels = out_channels,
         hidden_channels = model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.hidden_channels,
         n_layers = length(model.sfno_blocks.layers),
         lifting_channel_ratio=model.lifting_channel_ratio,
         projection_channel_ratio=model.projection_channel_ratio,
         channel_mlp_expansion=model.sfno_blocks.layers.layer_1.channel_mlp.expansion_factor,
-        activation = model.sfno_blocks.layers.layer_1.spherical_kernel.activation,
+        activation = model.sfno_blocks.layers.layer_1.activation,
         positional_embedding = model.embedding == NoOpLayer() ? "no_grid" : "grid",
         gpu = Base.unwrap_unionall(typeof(model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh)).parameters[end],
-        zsk = model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.zsk,
+        operator_type = model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.operator_type,
         inner_skip = model.sfno_blocks.layers.layer_1.skip,
         outer_skip = model.outer_skip,
-        use_norm= model.sfno_blocks.layers.layer_1.norm == NoOpLayer() ? false : true,
+        use_norm = model.sfno_blocks.layers.layer_1.spherical_kernel.norm == NoOpLayer() ? false : true,
         #downsampling_factor= model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[2] ÷ model.sfno_blocks.layers.layer_2.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[2]
         )
     return superres_model
@@ -90,6 +93,14 @@ function qg3pars_constructor_helper(L::Int, n_lat::Int; n_lon::Int=2*n_lat, iter
     lats, lons  = (ESM_PINO.gaussian_grid(n_lat; n_lon=n_lon, iters=iters, tol=tol))
     lats, lons = NF.(lats), NF.(lons)
     LS = h = zeros(NF, n_lat, n_lon)
+    QG3ModelParameters(L, lats, lons, LS, h)
+end
+
+function qg3pars_constructor_helper(L::Int, qg3ppars::QG3.QG3ModelParameters; NF::Type{<:AbstractFloat}=Float32)
+    _, lons  = (ESM_PINO.gaussian_grid(qg3ppars.N_lats; n_lon=qg3ppars.N_lons))
+    lats = qg3ppars.lats
+    lats, lons = NF.(lats), NF.(lons)
+    LS = h = zeros(NF, qg3ppars.N_lats, qg3ppars.N_lons)
     QG3ModelParameters(L, lats, lons, LS, h)
 end
 
@@ -250,8 +261,8 @@ function train_model(
     maxiters::Int=20, 
     batchsize::Int=256,
     modes::Int=pars.L,
-    in_channels::Int=3,
-    out_channels::Int=3,
+    in_channels::Int=size(x, 3),
+    out_channels::Int=size(target, 3),
     hidden_channels::Int=256,
     n_layers::Int=4,
     lifting_channel_ratio::Int=2,
@@ -261,10 +272,10 @@ function train_model(
     positional_embedding::AbstractString="grid",
     inner_skip::Bool=true,
     outer_skip::Bool=true,
-    zsk=false,
+    operator_type::Symbol = :driscoll_healy,
     use_norm::Bool=false,
     downsampling_factor::Int=2,
-    lr_0::Float64=1e-3, 
+    lr_0::Float64=2e-3, 
     parameters::QG3_Physics_Parameters=QG3_Physics_Parameters(pars, batch_size=batchsize),
     use_physics=true, 
     geometric=true,
@@ -273,12 +284,9 @@ function train_model(
     rng = Random.default_rng(seed)
     
     dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> gpu_device()
-    ggsh = QG3.GaussianGridtoSHTransform(pars, N_batch=batchsize)
-    shgg = QG3.SHtoGaussianGridTransform(pars, N_batch=batchsize)
     # Create the model
-    sfno = SFNO(
-        ggsh,
-        shgg,
+    sfno = SFNO(pars,
+        batch_size=batchsize,
         modes = modes,
         in_channels=in_channels, 
         out_channels=out_channels, 
@@ -291,7 +299,7 @@ function train_model(
         activation=activation,
         inner_skip=inner_skip,
         outer_skip=outer_skip,
-        zsk=zsk,
+        operator_type=operator_type,
         downsampling_factor=downsampling_factor,
         use_norm=use_norm,
         )
@@ -301,7 +309,7 @@ function train_model(
     # Rest of training setup remains similar
     
     opt = Optimisers.ADAM(lr_0)
-    lr = i -> CosAnneal(lr_0, typeof(lr_0)(0), maxiters)(i)
+    lr = i -> CosAnneal(lr_0, typeof(lr_0)(0), 20)(i)
     train_state = Training.TrainState(sfno, ps, st, opt)
     
     if !isnothing(parameters)
@@ -322,7 +330,7 @@ function train_model(
 
     iter = 1
     for (x, target_data) in Iterators.cycle(dataloader)
-        Optimisers.adjust!(train_state, lr(iter))
+        #Optimisers.adjust!(train_state, lr(iter))
         _, loss, stats, train_state = Training.single_train_step!(AutoZygote(), QG3_loss, (x, target_data), train_state)
         
         fit!(total_loss_tracker, Float32(loss))
@@ -512,4 +520,333 @@ function stack_time_steps(data::AbstractArray{T,4}, time_steps::Int) where T
     
     # Permute dimensions to get the desired shape
     return permutedims(result, (1, 2, 3, 5, 4))
+end
+
+function load_precomputed_data(; N_sims=1000, root=dirname(@__DIR__), res="t42")
+    if !isdir(string(root, "/data/"))
+        error("Data directory not found at $(string(root, "/data/")). Please ensure precomputed data is available.")
+    end
+    if res != "t21" && res != "t42"
+        error("Resolution $(res) not recognized. Supported resolutions are 't21' and 't42'.")
+    end
+    @load string(root, "/data/", res, "-precomputed-p.jld2") qg3ppars
+    qg3ppars = qg3ppars
+    qg3p = CUDA.@allowscalar QG3Model(qg3ppars)
+    @load string(root, "/data/",res, "-precomputed-S.jld2") S
+    if res == "t42"
+        S = CUDA.@allowscalar QG3.reorder_SH_gpu(S, qg3ppars)
+    else
+        S = QG3.togpu(S)
+    end 
+    # initial conditions for streamfunction and vorticity
+    @load string(root,"/data/", res, "_qg3_data_SH_CPU.jld2") q
+    q = QG3.reorder_SH_gpu(q[:,:,:,1:N_sims+2], qg3ppars)
+    ψ = QG3.qprimetoψ(qg3p, q)
+    solψ = permutedims(QG3.transform_grid_data(ψ, qg3p),(2,3,1,4))
+    solu = permutedims(QG3.transform_grid_data(q, qg3p),(2,3,1,4))
+    
+    return qg3ppars, qg3p, S, solψ, solu
+end
+
+N_sims = 1000
+
+"""
+    preprocess_data(;
+        noise_level::Real=0.0,
+        normalize::Bool=true,
+        channelwise::Bool=false,
+        to_gpu::Bool=false,
+        noise_type::Symbol=:gaussian,
+        slice_range::Union{Nothing, UnitRange, Tuple}=nothing
+    )
+
+Preprocess simulation data with normalization and noise injection options.
+
+# Keyword Arguments
+- `noise_level::Real=0.0`: Standard deviation of noise to add (0.0 = no noise)
+- `normalize::Bool=true`: Whether to normalize the data
+- `channelwise::Bool=false`: If true, normalize each channel independently
+- `to_gpu::Bool=false`: If true, transfer data to GPU after preprocessing
+- `noise_type::Symbol=:gaussian`: Type of noise (:gaussian, :uniform, :salt_pepper)
+- `slice_range::Union{Nothing, UnitRange, Tuple}=nothing`: Optional range(s) to slice data
+  - Can be a single UnitRange for the batch dimension
+  - Can be a Tuple of ranges for multiple dimensions: (lat_range, lon_range, channel_range, batch_range)
+
+# Returns
+- `q_0`: Initial conditions (preprocessed)
+- `q_evolved`: Evolved states (preprocessed)
+- `μ`: Mean(s) used for normalization (scalar or vector)
+- `σ`: Std(s) used for normalization (scalar or vector)
+- `normalization_params`: NamedTuple with normalization metadata
+
+# Examples
+```julia
+# Basic usage - no preprocessing
+q_0, q_evolved, μ, σ, params = preprocess_data(noise_level=0.0, normalize=false)
+
+# Normalize globally with noise
+q_0, q_evolved, μ, σ, params = preprocess_data(noise_level=0.01, normalize=true)
+
+# Channel-wise normalization with noise and GPU transfer
+q_0, q_evolved, μ, σ, params = preprocess_data(
+    noise_level=0.01, 
+    normalize=true, 
+    channelwise=true,
+    to_gpu=true
+)
+
+# Slice data: take first 100 samples from batch dimension
+q_0, q_evolved, μ, σ, params = preprocess_data(
+    slice_range=1:100,
+    normalize=true
+)
+
+# Advanced slicing: specify ranges for all dimensions
+q_0, q_evolved, μ, σ, params = preprocess_data(
+    slice_range=(1:48, 1:96, 1:3, 1:100),  # (lat, lon, channel, batch)
+    normalize=true
+)
+```
+"""
+function preprocess_data(;
+    normalize::Bool=true,
+    channelwise::Bool=false,
+    to_gpu::Bool=true,
+    noise_level::Real=0.01, 
+    noise_type::Symbol=:gaussian, 
+    relative::Bool=true,
+    rng::AbstractRNG=Random.GLOBAL_RNG,
+    slice_range::Union{Nothing, UnitRange, Tuple}=nothing
+)
+    
+    # Load raw data
+    qg3ppars, qg3p, S, solψ, solu = load_precomputed_data()
+    
+    # Apply slicing if requested
+    if !isnothing(slice_range)
+        if slice_range isa UnitRange
+            # Single range = slice batch dimension only
+            solu = solu[:, :, :, slice_range]
+        elseif slice_range isa Tuple
+            # Multiple ranges for different dimensions
+            if length(slice_range) == 4
+                lat_r, lon_r, ch_r, batch_r = slice_range
+                solu = solu[lat_r, lon_r, ch_r, batch_r]
+            else
+                throw(ArgumentError("slice_range tuple must have 4 elements (lat, lon, channel, batch)"))
+            end
+        end
+    end
+    
+    # Store original data info
+    data_shape = size(solu)
+    n_total_samples = size(solu, 4)
+    
+    # Normalization
+    μ, σ = 0, 1
+    if normalize
+        solu, μ, σ = ESM_PINO.normalize_data(solu, channelwise=channelwise)
+        @info "Data normalized" channelwise μ_type=typeof(μ) σ_type=typeof(σ)
+    else
+        @info "Normalization skipped"
+    end
+    
+    # Split into initial conditions and evolved states
+    # Ensure we have at least 2 time steps
+    if n_total_samples < 2
+        throw(ArgumentError("Need at least 2 time steps in data, got $n_total_samples"))
+    end
+    
+    # q_0: initial conditions (all samples except last)
+    q_0 = solu[:, :, :, 1:end-1]
+    
+    # q_evolved: evolved states (all samples except first)
+    q_evolved = solu[:, :, :, 2:end]
+    
+    # Add noise if requested
+    if noise_level > 0
+        q_0 = Array(q_0)  # Ensure it's on CPU for noise injection
+        q_evolved = Array(q_evolved)
+        
+        q_0 = ESM_PINO.add_noise(q_0, noise_level=noise_level, noise_type=noise_type, relative=relative, rng=rng)
+        q_evolved = ESM_PINO.add_noise(q_evolved, noise_level=noise_level, noise_type=noise_type, relative=relative, rng=rng)
+        
+        @info "Noise added" noise_level noise_type
+    else
+        @info "No noise added"
+    end
+    
+    # GPU transfer if requested
+    if to_gpu
+        q_0 = QG3.togpu(q_0)
+        q_evolved = QG3.togpu(q_evolved)
+        @info "Data transferred to GPU"
+    else
+        @info "Data kept on CPU"
+    end
+    
+    # Store preprocessing metadata
+    normalization_params = (
+        normalized=normalize,
+        channelwise=channelwise,
+        μ=μ,
+        σ=σ,
+        noise_level=noise_level,
+        noise_type=noise_type,
+        original_shape=data_shape,
+        n_pairs=size(q_0, 4),
+        on_gpu=to_gpu
+    )
+    
+    return q_0, q_evolved, μ, σ, normalization_params
+end
+"""
+    preprocess_data(solu::AbstractArray;
+        noise_level::Real=0.0,
+        normalize::Bool=true,
+        channelwise::Bool=false,
+        to_gpu::Bool=false,
+        noise_type::Symbol=:gaussian,
+        slice_range::Union{Nothing, UnitRange, Tuple}=nothing
+    )
+
+Preprocess simulation data with normalization and noise injection options.
+
+#Arguments
+-`solu::AbstractArray`: Raw simulation data array of shape (lat, lon, channel, time)
+
+# Keyword Arguments
+- `noise_level::Real=0.0`: Standard deviation of noise to add (0.0 = no noise)
+- `normalize::Bool=true`: Whether to normalize the data
+- `channelwise::Bool=false`: If true, normalize each channel independently
+- `to_gpu::Bool=false`: If true, transfer data to GPU after preprocessing
+- `noise_type::Symbol=:gaussian`: Type of noise (:gaussian, :uniform, :salt_pepper)
+- `slice_range::Union{Nothing, UnitRange, Tuple}=nothing`: Optional range(s) to slice data
+  - Can be a single UnitRange for the batch dimension
+  - Can be a Tuple of ranges for multiple dimensions: (lat_range, lon_range, channel_range, batch_range)
+
+# Returns
+- `q_0`: Initial conditions (preprocessed)
+- `q_evolved`: Evolved states (preprocessed)
+- `μ`: Mean(s) used for normalization (scalar or vector)
+- `σ`: Std(s) used for normalization (scalar or vector)
+- `normalization_params`: NamedTuple with normalization metadata
+
+# Examples
+```julia
+# Basic usage - no preprocessing
+q_0, q_evolved, μ, σ, params = preprocess_data(noise_level=0.0, normalize=false)
+
+# Normalize globally with noise
+q_0, q_evolved, μ, σ, params = preprocess_data(noise_level=0.01, normalize=true)
+
+# Channel-wise normalization with noise and GPU transfer
+q_0, q_evolved, μ, σ, params = preprocess_data(
+    noise_level=0.01, 
+    normalize=true, 
+    channelwise=true,
+    to_gpu=true
+)
+
+# Slice data: take first 100 samples from batch dimension
+q_0, q_evolved, μ, σ, params = preprocess_data(
+    slice_range=1:100,
+    normalize=true
+)
+
+# Advanced slicing: specify ranges for all dimensions
+q_0, q_evolved, μ, σ, params = preprocess_data(
+    slice_range=(1:48, 1:96, 1:3, 1:100),  # (lat, lon, channel, batch)
+    normalize=true
+)
+```
+"""
+function preprocess_data(solu::AbstractArray;
+    normalize::Bool=true,
+    channelwise::Bool=false,
+    to_gpu::Bool=true,
+    noise_level::Real=0.01, 
+    noise_type::Symbol=:gaussian, 
+    relative::Bool=true,
+    rng::AbstractRNG=Random.GLOBAL_RNG,
+    slice_range::Union{Nothing, UnitRange, Tuple}=nothing
+)
+    @assert ndims(solu) == 4 "Input data solu must be a 4D array (lat, lon, channel, time)"
+    # Apply slicing if requested
+    if !isnothing(slice_range)
+        if slice_range isa UnitRange
+            # Single range = slice batch dimension only
+            solu = solu[:, :, :, slice_range]
+        elseif slice_range isa Tuple
+            # Multiple ranges for different dimensions
+            if length(slice_range) == 4
+                lat_r, lon_r, ch_r, batch_r = slice_range
+                solu = solu[lat_r, lon_r, ch_r, batch_r]
+            else
+                throw(ArgumentError("slice_range tuple must have 4 elements (lat, lon, channel, batch)"))
+            end
+        end
+    end
+    
+    # Store original data info
+    data_shape = size(solu)
+    n_total_samples = size(solu, 4)
+    
+    # Normalization
+    μ, σ = 0, 1
+    if normalize
+        solu, μ, σ = ESM_PINO.normalize_data(solu, channelwise=channelwise)
+        @info "Data normalized" channelwise μ_type=typeof(μ) σ_type=typeof(σ)
+    else
+        @info "Normalization skipped"
+    end
+    
+    # Split into initial conditions and evolved states
+    # Ensure we have at least 2 time steps
+    if n_total_samples < 2
+        throw(ArgumentError("Need at least 2 time steps in data, got $n_total_samples"))
+    end
+    
+    # q_0: initial conditions (all samples except last)
+    q_0 = solu[:, :, :, 1:end-1]
+    
+    # q_evolved: evolved states (all samples except first)
+    q_evolved = solu[:, :, :, 2:end]
+    
+    # Add noise if requested
+    if noise_level > 0
+        q_0 = Array(q_0)  # Ensure it's on CPU for noise injection
+        q_evolved = Array(q_evolved)
+        
+        q_0 = ESM_PINO.add_noise(q_0, noise_level=noise_level, noise_type=noise_type, relative=relative, rng=rng)
+        q_evolved = ESM_PINO.add_noise(q_evolved, noise_level=noise_level, noise_type=noise_type, relative=relative, rng=rng)
+        
+        @info "Noise added" noise_level noise_type
+    else
+        @info "No noise added"
+    end
+    
+    # GPU transfer if requested
+    if to_gpu
+        q_0 = QG3.togpu(q_0)
+        q_evolved = QG3.togpu(q_evolved)
+        @info "Data transferred to GPU"
+    else
+        @info "Data kept on CPU"
+    end
+    
+    # Store preprocessing metadata
+    normalization_params = (
+        normalized=normalize,
+        channelwise=channelwise,
+        μ=μ,
+        σ=σ,
+        noise_level=noise_level,
+        noise_type=noise_type,
+        original_shape=data_shape,
+        n_pairs=size(q_0, 4),
+        on_gpu=to_gpu
+    )
+    
+    return q_0, q_evolved, μ, σ, normalization_params
 end
