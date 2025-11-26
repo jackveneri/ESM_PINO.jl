@@ -7,3 +7,6 @@
 /data/t42_qg3_data_SH_CPU.jld2
 /models/
 /examples/experiment.jl
+/examples/plotting_tests.jl
+/figures
+/data/Manifest.toml

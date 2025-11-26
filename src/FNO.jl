@@ -145,7 +145,7 @@ function _create_fno_components(
     lifting_channels = Int(lifting_channel_ratio * hidden_channels)
     lifting = Chain(
         Conv(kernel, in_channels => lifting_channels, activation),
-        Conv(kernel, lifting_channels => hidden_channels, activation),
+        Conv(kernel, lifting_channels => hidden_channels, identity),
     )
     
     # Create projection network
@@ -171,10 +171,10 @@ function _create_fno_components(
 end
 
 function _validate_positional_embedding(embedding_type::AbstractString, n_dim::Int)
-    valid_embeddings = ("grid", "no_grid", "grid1D", "no_grid1D", "grid3D", "no_grid3D")
+    valid_embeddings = ("grid", "no_grid", "grid1D", "no_grid1D", "grid3D", "no_grid3D", "gaussian_grid")
     if embedding_type ∉ valid_embeddings
         throw(ArgumentError(
-            "Invalid positional embedding type. Supported: 'grid', 'grid1D', 'grid3D' and their 'no_grid' variants."
+            "Invalid positional embedding type. Supported: 'grid', 'grid1D', 'grid3D' and their 'no_grid' variants, as well as 'gaussian_grid'."
         ))
     end
 end
@@ -186,13 +186,15 @@ function _create_embedding_and_adjust_channels(embedding_type::AbstractString, i
         return GridEmbedding1D(), in_channels + n_dim
     elseif embedding_type == "grid3D"
         return GridEmbedding3D(), in_channels + n_dim
-    else  
+    elseif embedding_type == "gaussian_grid"
+        return GaussianGridEmbedding2D(), in_channels + n_dim
+    else 
         return Lux.NoOpLayer(), in_channels
     end
 end
 
 function _get_conv_and_block_types(embedding_type::AbstractString)
-    if embedding_type in ("grid", "no_grid")
+    if embedding_type in ("grid", "no_grid", "gaussian_grid")
         return (1, 1), FNO_Block
     elseif embedding_type in ("grid1D", "no_grid1D")
         return (1,), FNO_Block1D

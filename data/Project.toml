@@ -1,0 +1,8 @@
+[deps]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
+QG3 = "d558103f-7907-4730-8f30-3d9252e5a318"
+
+[sources]
+QG3 = {rev = "main", url = "https://github.com/maximilian-gelbrecht/QG3.jl.git"}

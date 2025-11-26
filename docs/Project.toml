@@ -3,3 +3,7 @@ Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 ESM_PINO = "0812bf53-9fd7-49da-8b9b-5b8cac2079bc"
 QG3 = "d558103f-7907-4730-8f30-3d9252e5a318"
 SpeedyWeather = "9e226e20-d153-4fed-8a5b-493def4f21a9"
+
+[sources]
+ESM_PINO = {path = "C:\\Users\\jackv\\thesis_project\\ESM_PINO_Backup.jl"}
+QG3 = {rev = "main", url = "https://github.com/maximilian-gelbrecht/QG3.jl.git"}

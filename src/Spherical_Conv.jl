@@ -19,9 +19,8 @@ struct SphericalConv{T} <: AbstractSphericalConv
     hidden_channels::Int
     modes::Int
     plan :: T
-    zsk::Bool
+    operator_type::Symbol
     gpu_cols::Vector{Int}
-    permute_plan
 end
 # Default behavior: throw or warn if used without an extension
 Lux.initialparameters(rng::AbstractRNG, layer::SphericalConv{T}) where T =

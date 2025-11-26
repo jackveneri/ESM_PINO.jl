@@ -111,3 +111,53 @@ function calculate_gaussian_grid_size(truncation::Int)
     nlon = 2 * nlat
     return (nlat, nlon)
 end
+
+"""
+    get_truncation_from_nlat(nlat::Int) -> Int
+
+Retrieve the spectral truncation number for a given number of latitude points.
+
+# Arguments
+- `nlat::Int`: Number of latitude points
+
+# Returns
+- `Int`: Spectral truncation number (e.g., 31 for T31)
+
+# Examples
+```julia
+julia> get_truncation_from_nlat(48)
+31
+
+julia> get_truncation_from_nlat(96)
+63
+
+julia> get_truncation_from_nlat(256)
+255
+```
+
+# Throws
+- `ArgumentError`: If nlat doesn't match any known Gaussian grid resolution
+"""
+function get_truncation_from_nlat(nlat::Int)
+    # Search through known grids
+    for (name, grid_info) in GAUSSIAN_GRIDS
+        if grid_info.nlat == nlat
+            return grid_info.truncation
+        end
+    end
+    
+    # If not found in standard grids, try to estimate using inverse formula
+    # nlat ≈ (truncation + 1) * 3 / 2
+    # Therefore: truncation ≈ (2 * nlat / 3) - 1
+    estimated_truncation = round(Int, (2 * nlat / 3) - 1)
+    
+    # Verify the estimate by calculating back
+    calculated_nlat, _ = calculate_gaussian_grid_size(estimated_truncation)
+    
+    if calculated_nlat == nlat
+        @warn "nlat=$nlat not found in standard grids. Estimated truncation=$estimated_truncation"
+        return estimated_truncation
+    else
+        throw(ArgumentError("Cannot determine truncation for nlat=$nlat. Not found in standard grids and estimation failed."))
+    end
+end

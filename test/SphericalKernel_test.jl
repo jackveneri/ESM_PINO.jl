@@ -9,12 +9,12 @@ const SphericalKernel = ESM_PINO.SphericalKernel
     
 
     # Test configurations - automatically tests different combinations
-    test_configs = [
-        # (parameter_set, hidden_channels, modes, batch_size, use_gpu, use_zsk)
-        ("t21", 32, 30, 1, false, false),
-        ("t21", 32, 15, 2, false, true),
-        ("t42", 16, 20, 1, false, false),
-        ("t42", 64, 10, 4, false, true),
+   test_configs = [
+        # (parameter_set, hidden_channels, modes, batch_size, use_gpu, operator_type)
+        ("t21", 32, 30, 1, false, :driscoll_healy),
+        ("t21", 32, 15, 2, false, :diagonal),
+        ("t42", 16, 20, 1, false, :block_diagonal),
+        ("t42", 64, 10, 4, false, :driscoll_healy),
         # Add GPU tests if available (commented out by default for safety)
         # ("t21", 32, 30, 1, true, false),
         # ("t42", 32, 20, 2, true, true),
@@ -23,8 +23,8 @@ const SphericalKernel = ESM_PINO.SphericalKernel
     # Load parameter sets once to avoid repeated file I/O
     param_sets = Dict{String, Any}()
     @testset for config in test_configs
-    param_set, hidden_channels, modes, batch_size, use_gpu, use_zsk = config
-    config_name = "params=$(param_set)_ch=$(hidden_channels)_modes=$(modes)_batch=$(batch_size)_gpu=$(use_gpu)_zsk=$(use_zsk)"
+    param_set, hidden_channels, modes, batch_size, use_gpu, operator_type = config
+    config_name = "params=$(param_set)_ch=$(hidden_channels)_modes=$(modes)_batch=$(batch_size)_gpu=$(use_gpu)_zsk=$(operator_type)"
         @testset "Configuration: config_name" begin 
             
             # Load parameters if not already loaded
@@ -51,11 +51,11 @@ const SphericalKernel = ESM_PINO.SphericalKernel
             @testset "Initialization" begin
                 # Test construction with parameter object
                 layer = SphericalKernel(hidden_channels, qg3ppars; 
-                                    modes=modes, batch_size=batch_size, gpu=use_gpu, zsk=use_zsk)
+                                    modes=modes, batch_size=batch_size, gpu=use_gpu, operator_type=operator_type)
                 
                 # Test layer properties
                 @test layer.spherical_conv.hidden_channels == hidden_channels
-                @test layer.spherical_conv.zsk == use_zsk
+                @test layer.spherical_conv.operator_type == operator_type
                 @test layer.spherical_conv.modes <= qg3ppars.L  # Ensure modes correction works
                 
                 # Test parameter initialization
@@ -72,7 +72,7 @@ const SphericalKernel = ESM_PINO.SphericalKernel
                 # Test direct construction with transforms
                 ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, hidden_channels; N_batch=batch_size)
                 shgg = QG3.SHtoGaussianGridTransform(qg3ppars, hidden_channels; N_batch=batch_size)
-                layer_direct = SphericalKernel(hidden_channels, ggsh, shgg, modes=modes, zsk=use_zsk)
+                layer_direct = SphericalKernel(hidden_channels, ggsh, shgg, modes=modes, operator_type=operator_type)
                 
                 ps_direct, st_direct = Lux.setup(rng, layer_direct)
                 @test haskey(ps_direct, :spatial)
@@ -85,7 +85,7 @@ const SphericalKernel = ESM_PINO.SphericalKernel
             
             @testset "Forward Pass - $config_name" begin
                 layer = SphericalKernel(hidden_channels, qg3ppars; 
-                                    modes=modes, batch_size=batch_size, gpu=use_gpu, zsk=use_zsk)
+                                    modes=modes, batch_size=batch_size, gpu=use_gpu, operator_type=operator_type)
                 ps, st = Lux.setup(rng, layer)
                 
                 # Generate input matching the spherical grid dimensions
@@ -123,7 +123,7 @@ const SphericalKernel = ESM_PINO.SphericalKernel
             
             @testset "Backward Pass - Gradient Correctness - $config_name" begin
                 layer = SphericalKernel(hidden_channels, qg3ppars; 
-                                    modes=modes, batch_size=batch_size, gpu=use_gpu, zsk=use_zsk)
+                                    modes=modes, batch_size=batch_size, gpu=use_gpu, operator_type=operator_type)
                 ps, st = Lux.setup(rng, layer)
                 
                 # Generate appropriate input dimensions
