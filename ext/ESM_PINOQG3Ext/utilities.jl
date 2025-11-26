@@ -30,7 +30,9 @@ ŷ = new_model(x, ps, st)
 ```
 """
 function transfer_SFNO_model(model::ESM_PINO.SFNO, qg3ppars::QG3ModelParameters; 
-    batch_size::Int=model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[4]
+    batch_size::Int=typeof(model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh).parameters[end] ? 
+    model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[4] : 
+    model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.sz[4]
 )
     projection_layers = model.projection.layers
     last_layer_index = length(projection_layers)  # or fieldcount(typeof(projection_layers))
@@ -90,6 +92,7 @@ pars = qg3pars_constructor_helper(42, 64)
 ```
 """
 function qg3pars_constructor_helper(L::Int, n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real=1e-8,NF::Type{<:AbstractFloat}=Float32)
+    @assert L <= n_lat "L must be less than or equal to n_lat"
     lats, lons  = (ESM_PINO.gaussian_grid(n_lat; n_lon=n_lon, iters=iters, tol=tol))
     lats, lons = NF.(lats), NF.(lons)
     LS = h = zeros(NF, n_lat, n_lon)
@@ -97,6 +100,7 @@ function qg3pars_constructor_helper(L::Int, n_lat::Int; n_lon::Int=2*n_lat, iter
 end
 
 function qg3pars_constructor_helper(L::Int, qg3ppars::QG3.QG3ModelParameters; NF::Type{<:AbstractFloat}=Float32)
+    @assert L <= qg3ppars.N_lats "L must be less than or equal to n_lat"
     _, lons  = (ESM_PINO.gaussian_grid(qg3ppars.N_lats; n_lon=qg3ppars.N_lons))
     lats = qg3ppars.lats
     lats, lons = NF.(lats), NF.(lons)
@@ -275,16 +279,24 @@ function train_model(
     operator_type::Symbol = :driscoll_healy,
     use_norm::Bool=false,
     downsampling_factor::Int=2,
-    lr_0::Float64=2e-3, 
-    parameters::QG3_Physics_Parameters=QG3_Physics_Parameters(pars, batch_size=batchsize),
+    lr_0::Float64=2e-3,
+    gpu::Bool=true, 
+    parameters::QG3_Physics_Parameters=QG3_Physics_Parameters(pars, batch_size=batchsize, gpu=gpu),
     use_physics=true, 
     geometric=true,
-    α=0.7f0)
+    α=0.7f0,
+    )
+    
     
     rng = Random.default_rng(seed)
     
-    dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> gpu_device()
-    # Create the model
+    if gpu
+        dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> gpu_device()
+    else
+        dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> cpu_device()
+        QG3.gpuoff()
+    end
+        # Create the model
     sfno = SFNO(pars,
         batch_size=batchsize,
         modes = modes,
@@ -302,9 +314,13 @@ function train_model(
         operator_type=operator_type,
         downsampling_factor=downsampling_factor,
         use_norm=use_norm,
+        gpu=gpu
         )
-
-    ps, st = Lux.setup(rng, sfno) |> gpu_device()
+    if gpu
+        ps, st = Lux.setup(rng, sfno) |> gpu_device()
+    else
+        ps, st = Lux.setup(rng, sfno) |> cpu_device()
+    end
     @assert st isa NamedTuple "Model state should be a NamedTuple"
     # Rest of training setup remains similar
     
@@ -320,7 +336,8 @@ function train_model(
                 QG3.GaussianGridtoSHTransform(pars, N_batch=batchsize),
                 QG3.SHtoGaussianGridTransform(pars, N_batch=batchsize),
                 parameters.μ,
-                parameters.σ
+                parameters.σ,
+                gpu=gpu
         )
     else
         par_train = nothing
@@ -357,6 +374,7 @@ function train_model(
             break
         end
     end
+    QG3.gpuon()
     return StatefulLuxLayer{true}(sfno, train_state.parameters, train_state.states)
 end
 """
@@ -409,21 +427,31 @@ function fine_tuning(x::AbstractArray,
     st::NamedTuple;
     n_steps::Int=2,
     maxiters::Int=5, 
-    lr_0::Float64=1e-5, 
-    parameters::QG3_Physics_Parameters=QG3_Physics_Parameters(),
+    lr_0::Float64=1e-5,
+    gpu::Bool=true, 
+    parameters::QG3_Physics_Parameters=QG3_Physics_Parameters(gpu=gpu),
     use_physics=true,
     geometric=true, 
-    α=0.7f0)
+    α=0.7f0
+    )
     batchsize = #retrieve from model
-        model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[4]
+    typeof(model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh).parameters[end] ? 
+    model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[4] : 
+    model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.sz[4]    
     @assert length(size(target)) == 5 "Target data must have 5 dimensions (lat, lon, channel, batch, time)"
     target = permutedims(target, (1,2,3,5,4)) # make sure target is (lat, lon, channel, time, batch)
     @assert size(target, 4) == n_steps "Target data must be pre-computed to have the same 5th dimension size as the number of autoregressive steps computed in the loss"
-    dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> gpu_device()
+    if gpu
+        dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> gpu_device()
 
-    ps = ps |> gpu_device()
-    st = st |> gpu_device()
-    
+        ps = ps |> gpu_device()
+        st = st |> gpu_device()
+    else
+        dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> cpu_device()
+        ps = ps |> cpu_device()
+        st = st |> cpu_device()
+        QG3.gpuoff()
+    end
     # Rest of training setup remains similar
     
     opt = Optimisers.ADAM(lr_0)
@@ -437,7 +465,8 @@ function fine_tuning(x::AbstractArray,
                 QG3.GaussianGridtoSHTransform(QG3.tocpu(parameters.qg3p.p), N_batch=batchsize),
                 QG3.SHtoGaussianGridTransform(QG3.tocpu(parameters.qg3p.p), N_batch=batchsize),
                 parameters.μ,
-                parameters.σ
+                parameters.σ,
+                gpu=gpu
         )
     else
         par_train = nothing
@@ -475,6 +504,7 @@ function fine_tuning(x::AbstractArray,
             break
         end
     end
+    QG3.gpuon()
     return StatefulLuxLayer{true}(model, train_state.parameters, train_state.states)
 end
 """
@@ -522,7 +552,7 @@ function stack_time_steps(data::AbstractArray{T,4}, time_steps::Int) where T
     return permutedims(result, (1, 2, 3, 5, 4))
 end
 
-function load_precomputed_data(; N_sims=1000, root=dirname(@__DIR__), res="t42")
+function load_precomputed_data(; N_sims::Int=1000, root=dirname(@__DIR__), res="t42", dt::Int=1)
     if !isdir(string(root, "/data/"))
         error("Data directory not found at $(string(root, "/data/")). Please ensure precomputed data is available.")
     end
@@ -540,16 +570,13 @@ function load_precomputed_data(; N_sims=1000, root=dirname(@__DIR__), res="t42")
     end 
     # initial conditions for streamfunction and vorticity
     @load string(root,"/data/", res, "_qg3_data_SH_CPU.jld2") q
-    q = QG3.reorder_SH_gpu(q[:,:,:,1:N_sims+2], qg3ppars)
+    q = QG3.reorder_SH_gpu(q[:,:,:,1:dt:(N_sims-1)*dt+1], qg3ppars)
     ψ = QG3.qprimetoψ(qg3p, q)
     solψ = permutedims(QG3.transform_grid_data(ψ, qg3p),(2,3,1,4))
     solu = permutedims(QG3.transform_grid_data(q, qg3p),(2,3,1,4))
     
     return qg3ppars, qg3p, S, solψ, solu
 end
-
-N_sims = 1000
-
 """
     preprocess_data(;
         noise_level::Real=0.0,

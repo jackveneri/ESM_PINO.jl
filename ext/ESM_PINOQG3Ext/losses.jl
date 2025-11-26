@@ -16,8 +16,11 @@ $(TYPEDSIGNATURES)
 
 Helper constructor to pass as empty default to train_model
 """
-function QG3_Physics_Parameters(;n_lat=32, modes=21, batch_size=1)
+function QG3_Physics_Parameters(;n_lat=32, modes=21, batch_size=1, gpu::Bool=true)
     pars = qg3pars_constructor_helper(modes, n_lat)
+    if !gpu
+        QG3.gpuoff()
+    end
     ggsh = QG3.GaussianGridtoSHTransform(pars, N_batch=batch_size)
     shgg = QG3.SHtoGaussianGridTransform(pars, N_batch=batch_size)
     qg3p = CUDA.@allowscalar QG3Model(pars)
@@ -27,10 +30,14 @@ function QG3_Physics_Parameters(;n_lat=32, modes=21, batch_size=1)
     S = CUDA.@allowscalar QG3.reorder_SH_gpu(QG3.zeros_SH(pars),pars)
     dt = σ = 1
     μ = 0
+    QG3.gpuon()
     return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, quad_weights)
 end 
 
-function QG3_Physics_Parameters(pars::QG3.QG3ModelParameters; batch_size=1)
+function QG3_Physics_Parameters(pars::QG3.QG3ModelParameters; batch_size=1, gpu::Bool=true)
+    if !gpu
+        QG3.gpuoff()
+    end
     ggsh = QG3.GaussianGridtoSHTransform(pars, N_batch=batch_size)
     shgg = QG3.SHtoGaussianGridTransform(pars, N_batch=batch_size)
     qg3p = CUDA.@allowscalar QG3Model(pars)
@@ -40,6 +47,7 @@ function QG3_Physics_Parameters(pars::QG3.QG3ModelParameters; batch_size=1)
     S = CUDA.@allowscalar QG3.reorder_SH_gpu(QG3.zeros_SH(pars),pars)
     dt = σ = 1
     μ = 0
+    QG3.gpuon()
     return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, quad_weights) 
 end
 
@@ -48,14 +56,18 @@ function QG3_Physics_Parameters(dt::Real,
                                 S::AbstractArray,
                                 μ::Real,
                                 σ::Real;
-                                batch_size::Int=1)
+                                batch_size::Int=1,
+                                gpu::Bool=true)
+    if !gpu
+        QG3.gpuoff()
+    end                            
     ggsh = QG3.GaussianGridtoSHTransform(qg3p.p, N_batch=batch_size)
     shgg = QG3.SHtoGaussianGridTransform(qg3p.p, N_batch=batch_size)
 
     #geom_weights = QG3.togpu(reshape(qg3p.p.μ, :, 1, 1, 1))
     quad_weights = QG3.togpu(reshape(QG3.compute_GaussWeights(qg3p.p), :, 1, 1, 1))
     #weights = geom_weights .* quad_weights
-
+    QG3.gpuon()
     return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, quad_weights)
 end
 
@@ -65,10 +77,15 @@ function QG3_Physics_Parameters(dt::Real,
     ggsh::QG3.GaussianGridtoSHTransform,
     shgg::QG3.SHtoGaussianGridTransform,
     μ::Real,
-    σ::Real)
+    σ::Real;
+    gpu::Bool=true)
+    if !gpu
+        QG3.gpuoff()
+    end
     #geom_weights = QG3.togpu(reshape(qg3p.p.μ, :, 1, 1, 1))
     quad_weights = QG3.togpu(reshape(QG3.compute_GaussWeights(qg3p.p), :, 1, 1, 1))
     #weights = geom_weights .* quad_weights
+    QG3.gpuon()
     return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, quad_weights)
 end
 ############################
@@ -102,7 +119,11 @@ function physics_informed_loss_QG3(u, q_0, pars::QG3_Physics_Parameters)
         ∂u_∂t = permutedims(∂u_∂t, (3, 1, 2, 4))
 
         q_pred_SH = QG3.transform_SH(permutedims(q_pred, (3, 1, 2, 4)), pars.ggsh)
-        rhs_list = map(x -> QG3.QG3MM_gpu(x, (pars.qg3p, pars.S), (0,1)), eachslice(q_pred_SH; dims=4))
+        if Base.unwrap_unionall(typeof(pars.ggsh)).parameters[end]
+            rhs_list = map(x -> QG3.QG3MM_gpu(x, (pars.qg3p, pars.S), (0,1)), eachslice(q_pred_SH; dims=4))
+        else
+            rhs_list = map(x -> QG3.QG3MM_base(x, (pars.qg3p, pars.S), (0,1)), eachslice(q_pred_SH; dims=4))
+        end
         rhs = reduce((acc, x) -> cat(acc, x; dims=4), rhs_list)
         rhs_grid = QG3.transform_grid(rhs, pars.shgg)
 

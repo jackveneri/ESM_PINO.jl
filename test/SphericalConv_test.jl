@@ -10,11 +10,11 @@ const SphericalConv = ESM_PINO.SphericalConv
 
     # Test configurations - automatically tests different combinations
     test_configs = [
-        # (parameter_set, hidden_channels, modes, batch_size, use_gpu, use_zsk)
-        ("t21", 32, 30, 1, false, false),
-        ("t21", 32, 15, 2, false, true),
-        ("t42", 16, 20, 1, false, false),
-        ("t42", 64, 10, 4, false, true),
+        # (parameter_set, hidden_channels, modes, batch_size, use_gpu, operator_type)
+        ("t21", 32, 30, 1, false, :driscoll_healy),
+        ("t21", 32, 15, 2, false, :diagonal),
+        ("t42", 16, 20, 1, false, :block_diagonal),
+        ("t42", 64, 10, 4, false, :driscoll_healy),
         # Add GPU tests if available (commented out by default for safety)
         # ("t21", 32, 30, 1, true, false),
         # ("t42", 32, 20, 2, true, true),
@@ -23,8 +23,8 @@ const SphericalConv = ESM_PINO.SphericalConv
     # Load parameter sets once to avoid repeated file I/O
     param_sets = Dict{String, Any}()
     @testset for config in test_configs
-    param_set, hidden_channels, modes, batch_size, use_gpu, use_zsk = config
-    config_name = "params=$(param_set)_ch=$(hidden_channels)_modes=$(modes)_batch=$(batch_size)_gpu=$(use_gpu)_zsk=$(use_zsk)"
+    param_set, hidden_channels, modes, batch_size, use_gpu, operator_type = config
+    config_name = "params=$(param_set)_ch=$(hidden_channels)_modes=$(modes)_batch=$(batch_size)_gpu=$(use_gpu)_operator_type=$(operator_type)"
         @testset "Configuration: config_name" begin 
             
             # Load parameters if not already loaded
@@ -51,11 +51,11 @@ const SphericalConv = ESM_PINO.SphericalConv
             @testset "Initialization" begin
                 # Test construction with parameter object
                 layer = SphericalConv(qg3ppars, hidden_channels; 
-                                    modes=modes, batch_size=batch_size, gpu=use_gpu, zsk=use_zsk)
+                                    modes=modes, batch_size=batch_size, gpu=use_gpu, operator_type=operator_type)
                 
                 # Test layer properties
                 @test layer.hidden_channels == hidden_channels
-                @test layer.zsk == use_zsk
+                @test layer.operator_type == operator_type
                 @test layer.modes <= qg3ppars.L  # Ensure modes correction works
                 
                 # Test parameter initialization
@@ -63,7 +63,7 @@ const SphericalConv = ESM_PINO.SphericalConv
                 
                 # Verify parameters exist and have correct structure
                 @test haskey(ps, :weight)
-                if use_zsk
+                if operator_type
                     @test size(ps.weight) == (hidden_channels, layer.modes, 1, 1)
                 else
                     @test size(ps.weight) == (hidden_channels, layer.modes, 2 * layer.modes - 1, 1)
@@ -75,7 +75,7 @@ const SphericalConv = ESM_PINO.SphericalConv
                 # Test direct construction with transforms
                 ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, hidden_channels; N_batch=batch_size)
                 shgg = QG3.SHtoGaussianGridTransform(qg3ppars, hidden_channels; N_batch=batch_size)
-                layer_direct = SphericalConv(hidden_channels, ggsh, shgg, modes; zsk=use_zsk)
+                layer_direct = SphericalConv(hidden_channels, ggsh, shgg, modes; operator_type=operator_type)
                 
                 ps_direct, st_direct = Lux.setup(rng, layer_direct)
                 @test haskey(ps_direct, :weight)
@@ -84,7 +84,7 @@ const SphericalConv = ESM_PINO.SphericalConv
             
             @testset "Forward Pass - $config_name" begin
                 layer = SphericalConv(qg3ppars, hidden_channels; 
-                                    modes=modes, batch_size=batch_size, gpu=use_gpu, zsk=use_zsk)
+                                    modes=modes, batch_size=batch_size, gpu=use_gpu, operator_type=operator_type)
                 ps, st = Lux.setup(rng, layer)
                 
                 # Generate input matching the spherical grid dimensions
@@ -122,7 +122,7 @@ const SphericalConv = ESM_PINO.SphericalConv
             
             @testset "Backward Pass - Gradient Correctness - $config_name" begin
                 layer = SphericalConv(qg3ppars, hidden_channels; 
-                                    modes=modes, batch_size=batch_size, gpu=use_gpu, zsk=use_zsk)
+                                    modes=modes, batch_size=batch_size, gpu=use_gpu, operator_type=operator_type)
                 ps, st = Lux.setup(rng, layer)
                 
                 # Generate appropriate input dimensions

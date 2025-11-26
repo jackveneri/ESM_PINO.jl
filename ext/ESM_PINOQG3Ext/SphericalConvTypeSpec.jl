@@ -11,7 +11,7 @@ function ESM_PINO.SphericalConv(
         throw(ArgumentError("operator_type must be one of $valid_operators, got :$operator_type"))
     end
     
-    safe_modes = shgg.output_size[1]
+    safe_modes = min(shgg.output_size[1], size(ggsh.Pw,1))
     
     # Correct modes if necessary
     corrected_modes = 0

@@ -10,21 +10,21 @@ using LuxTestUtils, JLD2
 
     # Test configurations - automatically tests different combinations
     test_configs = [
-        # (parameter_set, hidden_channels, modes, batch_size, use_gpu, use_zsk)
-        ("t21", 32, 30, 1, false, false, "grid"),
-        ("t21", 32, 15, 2, false, true, "no_grid"),
-        ("t42", 16, 20, 1, false, false, "no_grid"),
-        ("t42", 64, 10, 4, false, true, "grid"),
+        # (parameter_set, hidden_channels, modes, batch_size, use_gpu, operator_type)
+        ("t21", 32, 30, 1, false, :driscoll_healy, "gaussian_grid"),
+        ("t21", 32, 15, 2, false, :diagonal, "grid"),
+        ("t42", 16, 20, 1, false, :block_diagonal, "no_grid"),
+        ("t42", 64, 10, 4, false, :driscoll_healy, "no_grid"),
         # Add GPU tests if available (commented out by default for safety)
-        # ("t21", 32, 30, 1, true, false, "grid"),
-        # ("t42", 32, 20, 2, true, true, "no_grid"),
+        # ("t21", 32, 30, 1, true, false),
+        # ("t42", 32, 20, 2, true, true),
     ]
     
     # Load parameter sets once to avoid repeated file I/O
     param_sets = Dict{String, Any}()
     @testset for config in test_configs
-    param_set, hidden_channels, modes, batch_size, use_gpu, use_zsk, positional_embedding = config
-    config_name = "params=$(param_set)_ch=$(hidden_channels)_modes=$(modes)_batch=$(batch_size)_gpu=$(use_gpu)_zsk=$(use_zsk)_positional=$(positional_embedding)"
+    param_set, hidden_channels, modes, batch_size, use_gpu, operator_type, positional_embedding = config
+    config_name = "params=$(param_set)_ch=$(hidden_channels)_modes=$(modes)_batch=$(batch_size)_gpu=$(use_gpu)_zsk=$(operator_type)_positional=$(positional_embedding)"
         @testset "Configuration: config_name" begin 
             
             # Load parameters if not already loaded
@@ -51,7 +51,7 @@ using LuxTestUtils, JLD2
             @testset "Initialization" begin
                 # Test construction with parameter object
                 layer = SFNO(qg3ppars; in_channels=hidden_channels, out_channels=hidden_channels,
-                                    modes=modes, batch_size=batch_size, zsk=use_zsk, positional_embedding=positional_embedding)
+                                    modes=modes, batch_size=batch_size, operator_type=operator_type, positional_embedding=positional_embedding)
                 
                 # Test layer properties
                 @test layer.embedding != nothing
@@ -74,7 +74,7 @@ using LuxTestUtils, JLD2
                 # Test direct construction with transforms
                 ggsh = QG3.GaussianGridtoSHTransform(qg3ppars, hidden_channels; N_batch=batch_size)
                 shgg = QG3.SHtoGaussianGridTransform(qg3ppars, hidden_channels; N_batch=batch_size)
-                layer_direct = SFNO(ggsh, shgg, batch_size=batch_size, in_channels=hidden_channels, out_channels=hidden_channels, modes=modes, zsk=use_zsk, positional_embedding=positional_embedding)
+                layer_direct = SFNO(ggsh, shgg, batch_size=batch_size, in_channels=hidden_channels, out_channels=hidden_channels, modes=modes, operator_type=operator_type, positional_embedding=positional_embedding)
                 
                 ps_direct, st_direct = Lux.setup(rng, layer_direct)
                  # Verify parameters exist and have correct structure
@@ -92,7 +92,7 @@ using LuxTestUtils, JLD2
             
             @testset "Forward Pass - $config_name" begin
                 layer = SFNO(qg3ppars; in_channels=hidden_channels, out_channels=hidden_channels, 
-                                    modes=modes, batch_size=batch_size, zsk=use_zsk, positional_embedding=positional_embedding, gpu=false)
+                                    modes=modes, batch_size=batch_size, operator_type=operator_type, positional_embedding=positional_embedding, gpu=false)
                 ps, st = Lux.setup(rng, layer)
                 
                 # Generate input matching the spherical grid dimensions
@@ -130,7 +130,7 @@ using LuxTestUtils, JLD2
             
             @testset "Backward Pass - Gradient Correctness - $config_name" begin
                 layer = SFNO(qg3ppars; in_channels=hidden_channels, out_channels=hidden_channels,
-                                    modes=modes, batch_size=batch_size, zsk=use_zsk, positional_embedding=positional_embedding, gpu=false)
+                                    modes=modes, batch_size=batch_size, operator_type=operator_type, positional_embedding=positional_embedding, gpu=false)
                 ps, st = Lux.setup(rng, layer)
                 
                 # Generate appropriate input dimensions

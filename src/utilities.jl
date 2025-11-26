@@ -285,9 +285,24 @@ end
 function gaussian_grid(n_lat::Int; n_lon::Int=2*n_lat, iters::Int=100, tol::Real=1e-10)
     
     # Longitudes (equally spaced)
+    if n_lon ==64
+        longitudes = Float32[0.000000000000000,0.098174773156643,0.196349546313286,0.294524312019348,0.392699092626572,
+                        0.490873843431473,0.589048624038696,0.687223374843597,0.785398185253143,0.883572936058044,
+                        0.981747686862946,1.079922437667847,1.178097248077393,1.276272058486938,1.374446749687195,
+                        1.472621560096741,1.570796370506287,1.668971061706543,1.767145872116089,1.865320682525635,
+                        1.963495373725891,2.061670064926147,2.159844875335693,2.258019685745239,2.356194496154785,
+                        2.454369306564331,2.552544116973877,2.650718688964844,2.748893499374390,2.847068309783936,
+                        2.945243120193481,3.043417930603027,3.141592741012573,3.239767313003540,3.337942123413086,
+                        3.436116933822632,3.534291744232178,3.632466554641724,3.730641365051270,3.828815937042236,
+                        3.926990747451782,4.025165557861328,4.123340129852295,4.221515178680420,4.319689750671387,
+                        4.417864799499512,4.516039371490479,4.614213943481445,4.712388992309570,4.810563564300537,
+                        4.908738613128662,5.006913185119629,5.105088233947754,5.203262805938721,5.301437377929688,
+                        5.399612426757812,5.497786998748779,5.595962047576904,5.694136619567871,5.792311191558838,
+                        5.890486240386963,5.988660812377930,6.086835861206055,6.185010433197021]
+    else
     lon_step = 2π / n_lon
     longitudes = range(0, 2π - lon_step, length=n_lon)
-    
+    end
     # Gaussian latitudes (using Legendre polynomial roots)
     latitudes = compute_gaussian_latitudes(n_lat, iters=iters, tol=tol)
     
@@ -297,37 +312,44 @@ end
 """
     Compute Gaussian latitudes using Newton's method to find roots of Legendre polynomials.
     Returns latitudes in radians, sorted from North to South (decreasing order).
+    If n_lat is a common value (32 or 64), precomputed roots are returned to ensure consistency with precomputed available QG3 data.
 """
 function compute_gaussian_latitudes(n_lat::Int; iters::Int=100, tol::Real=1e-10)
-    n = n_lat
-    
-    # Use the standard approach for Gaussian latitudes
-    x_values = zeros(Float64, n)
-    
-    # Initial guesses - more accurate starting points
-    for i in 1:n
-        # Better initial guess using cosine of adjusted angle
-        x0 = cos(π * (i - 0.25) / (n + 0.5))
+    #for common n_lat values, return precomputed roots for QG3 compatibility
+    if n_lat == 32
+        @load string(pwd(),"/data/t21-precomputed-p.jld2") qg3ppars
+        return qg3ppars.lats
+    elseif n_lat == 64
+        @load string(pwd(),"/data/t42-precomputed-p.jld2") qg3ppars
+        return qg3ppars.lats
+    else
+        n = n_lat
+        x_values = zeros(Float64, n)
         
-        # Refine using Newton's method
-        x = x0
-        for iter in 1:iters
-            p, dp = legendre_polynomial(n, x)
-            delta = p / dp
-            x -= delta
-            if abs(delta) < tol
-                break
+        for i in 1:n
+            #initial guess
+            k = Float64(i)
+            x0 = cos(π * (k - 0.25 + 1/(8*(2k-1))) / (n + 0.5))
+            
+            x = x0
+            for iter in 1:iters
+                p, dp = legendre_polynomial(n, x)
+                if abs(p) < tol
+                    break
+                end
+                delta = p / dp
+                x_new = x - delta
+                if x_new < -1.0 || x_new > 1.0
+                    x_new = x - 0.5 * delta
+                end
+                x = x_new
             end
+            x_values[i] = x
         end
         
-        x_values[i] = x
+        # Sort and convert to latitudes
+        return asin.(sort(x_values, rev=true))
     end
-    
-    # Convert from cosine of colatitude to latitude in radians
-    # and ensure proper ordering from North Pole to South Pole
-    latitudes = asin.(sort(x_values, rev=true))
-    
-    return latitudes
 end
 
 """
