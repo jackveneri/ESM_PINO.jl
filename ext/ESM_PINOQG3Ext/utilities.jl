@@ -538,13 +538,16 @@ seq_data = stack_time_steps(data, 4)
 @assert size(seq_data) == (64, 128, 3, 4, 7)
 ```
 """
-function stack_time_steps(data::AbstractArray{T,4}, time_steps::Int) where T
+function stack_time_steps(data::AbstractArray{T,4}, time_steps::Int; dt::Int=1, N_sims::Int=size(data,4)-(time_steps -1)*dt) where T
     lat, lon, channels, batch_size = size(data)
-    n_sequences = batch_size - time_steps + 1
-    
+    max_n_sequences = batch_size - (time_steps -1)*dt
+    n_sequences = min(N_sims, max_n_sequences)
+    if n_sequences < N_sims
+        println("Warning: Requested number of sequences $(N_sims) exceeds maximum possible $(max_n_sequences). Using $(n_sequences) instead.")
+    end
     # Create 5D array using comprehension
     result = cat(
-        [data[:, :, :, i:i+time_steps-1] for i in 1:n_sequences]...,
+        [data[:, :, :, i:dt:i+dt*(time_steps-1)] for i in 1:n_sequences]...,
         dims=5
     )
     
@@ -552,7 +555,7 @@ function stack_time_steps(data::AbstractArray{T,4}, time_steps::Int) where T
     return permutedims(result, (1, 2, 3, 5, 4))
 end
 
-function load_precomputed_data(; N_sims::Int=1000, root=dirname(@__DIR__), res="t42", dt::Int=1)
+function load_precomputed_data(; N_sims::Int=1000, root=dirname(@__DIR__), res="t42")
     if !isdir(string(root, "/data/"))
         error("Data directory not found at $(string(root, "/data/")). Please ensure precomputed data is available.")
     end
@@ -570,7 +573,7 @@ function load_precomputed_data(; N_sims::Int=1000, root=dirname(@__DIR__), res="
     end 
     # initial conditions for streamfunction and vorticity
     @load string(root,"/data/", res, "_qg3_data_SH_CPU.jld2") q
-    q = QG3.reorder_SH_gpu(q[:,:,:,1:dt:(N_sims-1)*dt+1], qg3ppars)
+    q = QG3.reorder_SH_gpu(q[:,:,:,1:N_sims], qg3ppars)
     ψ = QG3.qprimetoψ(qg3p, q)
     solψ = permutedims(QG3.transform_grid_data(ψ, qg3p),(2,3,1,4))
     solu = permutedims(QG3.transform_grid_data(q, qg3p),(2,3,1,4))
@@ -643,7 +646,8 @@ function preprocess_data(;
     noise_type::Symbol=:gaussian, 
     relative::Bool=true,
     rng::AbstractRNG=Random.GLOBAL_RNG,
-    slice_range::Union{Nothing, UnitRange, Tuple}=nothing
+    slice_range::Union{Nothing, UnitRange, Tuple}=nothing,
+    dt::Int=1
 )
     
     # Load raw data
@@ -685,10 +689,10 @@ function preprocess_data(;
     end
     
     # q_0: initial conditions (all samples except last)
-    q_0 = solu[:, :, :, 1:end-1]
+    q_0 = solu[:, :, :, 1:end-dt]
     
     # q_evolved: evolved states (all samples except first)
-    q_evolved = solu[:, :, :, 2:end]
+    q_evolved = solu[:, :, :, 1+dt:end]
     
     # Add noise if requested
     if noise_level > 0
@@ -796,7 +800,8 @@ function preprocess_data(solu::AbstractArray;
     noise_type::Symbol=:gaussian, 
     relative::Bool=true,
     rng::AbstractRNG=Random.GLOBAL_RNG,
-    slice_range::Union{Nothing, UnitRange, Tuple}=nothing
+    slice_range::Union{Nothing, UnitRange, Tuple}=nothing,
+    dt::Int=1
 )
     @assert ndims(solu) == 4 "Input data solu must be a 4D array (lat, lon, channel, time)"
     # Apply slicing if requested
@@ -835,10 +840,10 @@ function preprocess_data(solu::AbstractArray;
     end
     
     # q_0: initial conditions (all samples except last)
-    q_0 = solu[:, :, :, 1:end-1]
+    q_0 = solu[:, :, :, 1:end-dt]
     
     # q_evolved: evolved states (all samples except first)
-    q_evolved = solu[:, :, :, 2:end]
+    q_evolved = solu[:, :, :, 1+dt:end]
     
     # Add noise if requested
     if noise_level > 0

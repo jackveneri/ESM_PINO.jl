@@ -11,7 +11,11 @@ function ESM_PINO.SphericalConv(
         throw(ArgumentError("operator_type must be one of $valid_operators, got :$operator_type"))
     end
     
-    safe_modes = min(shgg.output_size[1], size(ggsh.Pw,1))
+    if typeof(ggsh).parameters[end] == true
+        safe_modes = min(shgg.output_size[1], size(ggsh.Pw,1))    
+    else
+        safe_modes = min(size(ggsh.Pw,2),size(shgg.P,2))
+    end
     
     # Correct modes if necessary
     corrected_modes = 0
@@ -49,7 +53,11 @@ function ESM_PINO.SphericalConv(
     end
     
     # Correct modes upfront
-    corrected_modes = min(modes, pars.N_lats)
+    if gpu
+        corrected_modes = min(modes, pars.N_lats)
+    else
+        corrected_modes = min(modes, pars.L)
+    end
     if modes != corrected_modes
         @warn "modes ($modes) exceeds N_lats ($(pars.N_lats)). Setting modes = $(pars.N_lats)."
     end

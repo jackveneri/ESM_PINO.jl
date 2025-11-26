@@ -317,10 +317,10 @@ end
 function compute_gaussian_latitudes(n_lat::Int; iters::Int=100, tol::Real=1e-10)
     #for common n_lat values, return precomputed roots for QG3 compatibility
     if n_lat == 32
-        @load string(pwd(),"/data/t21-precomputed-p.jld2") qg3ppars
+        @load string(dirname(@__DIR__),"/data/t21-precomputed-p.jld2") qg3ppars
         return qg3ppars.lats
     elseif n_lat == 64
-        @load string(pwd(),"/data/t42-precomputed-p.jld2") qg3ppars
+        @load string(dirname(@__DIR__),"/data/t42-precomputed-p.jld2") qg3ppars
         return qg3ppars.lats
     else
         n = n_lat
@@ -404,7 +404,7 @@ function analyze_weights(ps, prefix="", indent=0)
     end
 end
 
-function apply_n_times(f, x::AbstractArray, n::Int; m::Int=0, μ=0.0,  σ=1.0)
+function apply_n_times(f, x::AbstractArray, n::Int; m::Int=0, μ=0.0,  σ=1.0, channelwise::Bool=false)
     y = x
     snapshots = m > 0 ? Vector{typeof(x)}() : nothing
     save_steps = m > 0 ? round.(Int, range(1, n; length=m)) : Int[]
@@ -412,7 +412,7 @@ function apply_n_times(f, x::AbstractArray, n::Int; m::Int=0, μ=0.0,  σ=1.0)
     for i in 1:n
         y = f(y)
         if i in save_steps
-            push!(snapshots, copy(y) .* σ .+ μ)
+            push!(snapshots, copy(denormalize_data(y, μ, σ, channelwise=channelwise)))
         end
     end
 

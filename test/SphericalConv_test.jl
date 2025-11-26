@@ -11,7 +11,7 @@ const SphericalConv = ESM_PINO.SphericalConv
     # Test configurations - automatically tests different combinations
     test_configs = [
         # (parameter_set, hidden_channels, modes, batch_size, use_gpu, operator_type)
-        ("t21", 32, 30, 1, false, :driscoll_healy),
+        ("t21", 32, 35, 1, false, :driscoll_healy),
         ("t21", 32, 15, 2, false, :diagonal),
         ("t42", 16, 20, 1, false, :block_diagonal),
         ("t42", 64, 10, 4, false, :driscoll_healy),
@@ -56,17 +56,19 @@ const SphericalConv = ESM_PINO.SphericalConv
                 # Test layer properties
                 @test layer.hidden_channels == hidden_channels
                 @test layer.operator_type == operator_type
-                @test layer.modes <= qg3ppars.L  # Ensure modes correction works
+                @test layer.modes <= qg3ppars.N_lats  # Ensure modes correction works
                 
                 # Test parameter initialization
                 ps, st = Lux.setup(rng, layer)
                 
                 # Verify parameters exist and have correct structure
                 @test haskey(ps, :weight)
-                if operator_type
-                    @test size(ps.weight) == (hidden_channels, layer.modes, 1, 1)
-                else
-                    @test size(ps.weight) == (hidden_channels, layer.modes, 2 * layer.modes - 1, 1)
+                if operator_type == :driscoll_healy
+                    @test size(ps.weight) == (hidden_channels,hidden_channels, layer.modes)
+                elseif operator_type == :diagonal
+                    @test size(ps.weight) == (hidden_channels, hidden_channels, layer.modes, 2 * layer.modes - 1)
+                else 
+                    @test size(ps.weight) == (hidden_channels, hidden_channels, layer.modes, 2*layer.modes-1, 2*layer.modes-1)
                 end
                 
                 # Verify state is properly initialized (should be empty NamedTuple)

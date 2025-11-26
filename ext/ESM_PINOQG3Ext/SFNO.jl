@@ -134,7 +134,11 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
         )
         
         # Setup modes and transforms
-        safe_modes = pars.N_lats ÷ downsampling_factor
+        if gpu
+            safe_modes = pars.N_lats ÷ downsampling_factor
+        else
+            safe_modes = pars.L ÷ downsampling_factor + 1 #this is not very precise
+        end
         # Correct modes if necessary
         corrected_modes = 0
         if modes == 0
@@ -350,7 +354,11 @@ function ESM_PINO.SFNO(
             bias
         )
         N_lats = shgg.output_size[1]
-        safe_modes = N_lats ÷ downsampling_factor
+        if gpu
+            safe_modes = N_lats ÷ downsampling_factor
+        else
+            safe_modes = min(size(ggsh.Pw,2), size(shgg.P,2)) ÷ downsampling_factor + 1 #this is not very precise
+        end
         # Correct modes if necessary
         corrected_modes = 0
         if modes == 0
