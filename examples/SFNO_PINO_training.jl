@@ -11,7 +11,7 @@ const cdev = cpu_device()
 
 dt = 1 #QG3.p.time_unit
 maxiters = 500
-hidden_channels = 20
+hidden_channels = 15
 batch_size = 10
 N_sims = 1000
 
@@ -26,14 +26,15 @@ pars = ESM_PINOQG3.QG3_Physics_Parameters(dt, qg3p, S, ggsh_loss, shgg_loss, μ,
 
 trained_model = ESM_PINOQG3.train_model(q_0[:,:,:,1:N_sims], q_evolved[:,:,:,1:N_sims], qg3ppars, 
                                             maxiters=maxiters,
-                                            downsampling_factor=1, 
+                                            downsampling_factor=1,
+                                            modes=qg3ppars.N_lats, 
                                             hidden_channels=hidden_channels, 
                                             parameters=pars, 
                                             batchsize=batch_size,
                                             use_norm=true,
                                             operator_type =:driscoll_healy,
                                             inner_skip=true,
-                                            outer_skip=false,
+                                            outer_skip=true,
                                             use_physics=true,
                                             geometric=true,
                                             positional_embedding = "gaussian_grid"

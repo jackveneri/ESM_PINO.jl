@@ -243,15 +243,14 @@ function denormalize_data(normalized_data::AbstractArray, μ, σ; channelwise::B
                 throw(ArgumentError("μ and σ length ($(length(μ))) must match number of channels ($n_channels)"))
             end
             
-            denormalized_data = similar(normalized_data)
+            # Create denormalized channels as a vector of arrays
+            denormalized_channels = [
+                selectdim(normalized_data, 3, c) .* σ[c] .+ μ[c]
+                for c in 1:n_channels
+            ]
             
-            for c in 1:n_channels
-                channel_data = selectdim(normalized_data, 3, c)
-                denormalized_channel = channel_data .* σ[c] .+ μ[c]
-                selectdim(denormalized_data, 3, c) .= denormalized_channel
-            end
-            
-            return denormalized_data
+            # Stack along the channel dimension
+            return permutedims(cat(denormalized_channels...; dims=4),(1,2,4,3))
             
         elseif ndims_data == 3
             # (lat, lon, channel) format
@@ -261,15 +260,14 @@ function denormalize_data(normalized_data::AbstractArray, μ, σ; channelwise::B
                 throw(ArgumentError("μ and σ length must match number of channels"))
             end
             
-            denormalized_data = similar(normalized_data)
+            # Create denormalized channels as a vector of arrays
+            denormalized_channels = [
+                selectdim(normalized_data, 3, c) .* σ[c] .+ μ[c]
+                for c in 1:n_channels
+            ]
             
-            for c in 1:n_channels
-                channel_data = selectdim(normalized_data, 3, c)
-                denormalized_channel = channel_data .* σ[c] .+ μ[c]
-                selectdim(denormalized_data, 3, c) .= denormalized_channel
-            end
-            
-            return denormalized_data
+            # Stack along the channel dimension
+            return cat(denormalized_channels...; dims=3)
         else
             throw(ArgumentError("Channel-wise denormalization expects 3D or 4D data"))
         end

@@ -4,7 +4,7 @@ using SpeedyWeather
 using SpeedyWeather.RingGrids
 using SpeedyWeather.LowerTriangularArrays
 using SpeedyWeather.SpeedyTransforms
-using Lux, Random
+using Lux, Random, ESM_PINO.OMEinsum
 using ESM_PINO.DocStringExtensions
 
 struct ESM_PINOSpeedy

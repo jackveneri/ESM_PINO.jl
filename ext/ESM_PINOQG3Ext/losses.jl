@@ -7,8 +7,8 @@ struct QG3_Physics_Parameters
     S::AbstractArray
     ggsh::QG3.GaussianGridtoSHTransform
     shgg::QG3.SHtoGaussianGridTransform
-    μ::Real
-    σ::Real
+    μ::Union{Real, AbstractArray}
+    σ::Union{Real, AbstractArray}
     weights::AbstractArray
 end
 """
@@ -54,8 +54,8 @@ end
 function QG3_Physics_Parameters(dt::Real,
                                 qg3p::QG3.QG3Model,
                                 S::AbstractArray,
-                                μ::Real,
-                                σ::Real;
+                                μ::Union{Real, AbstractArray},
+                                σ::Union{Real, AbstractArray};
                                 batch_size::Int=1,
                                 gpu::Bool=true)
     if !gpu
@@ -76,8 +76,8 @@ function QG3_Physics_Parameters(dt::Real,
     S::AbstractArray,
     ggsh::QG3.GaussianGridtoSHTransform,
     shgg::QG3.SHtoGaussianGridTransform,
-    μ::Real,
-    σ::Real;
+    μ::Union{Real, AbstractArray},
+    σ::Union{Real, AbstractArray};
     gpu::Bool=true)
     if !gpu
         QG3.gpuoff()
@@ -112,21 +112,17 @@ function physics_informed_loss_QG3(u, q_0, pars::QG3_Physics_Parameters)
     @views begin
         σ = pars.σ
         μ = pars.μ
-        q_pred = u(q_0) .* σ .+ μ
-        q_0_denorm = q_0 .* σ .+ μ
+        channelwise = !(isa(σ, Real) && isa(μ, Real))
+        q_pred = ESM_PINO.denormalize_data(u(q_0), μ, σ, channelwise=channelwise)
+        q_0_denorm = ESM_PINO.denormalize_data(q_0, μ, σ, channelwise=channelwise)
 
         ∂u_∂t = (q_pred .- q_0_denorm) ./ pars.dt
         ∂u_∂t = permutedims(∂u_∂t, (3, 1, 2, 4))
 
         q_pred_SH = QG3.transform_SH(permutedims(q_pred, (3, 1, 2, 4)), pars.ggsh)
-        if Base.unwrap_unionall(typeof(pars.ggsh)).parameters[end]
-            rhs_list = map(x -> QG3.QG3MM_gpu(x, (pars.qg3p, pars.S), (0,1)), eachslice(q_pred_SH; dims=4))
-        else
-            rhs_list = map(x -> QG3.QG3MM_base(x, (pars.qg3p, pars.S), (0,1)), eachslice(q_pred_SH; dims=4))
-        end
+        rhs_list = map(x -> QG3.QG3MM_gpu(x, (pars.qg3p, pars.S), (0,1)), eachslice(q_pred_SH; dims=4))
         rhs = reduce((acc, x) -> cat(acc, x; dims=4), rhs_list)
         rhs_grid = QG3.transform_grid(rhs, pars.shgg)
-
         residual = ∂u_∂t .- rhs_grid
         return mean(abs2, residual)    
     end

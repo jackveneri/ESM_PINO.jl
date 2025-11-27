@@ -1,11 +1,11 @@
-function SphericalConv(resolution::Int, hidden_channels::Int;
+function ESM_PINO.SphericalConv(resolution::Int, hidden_channels::Int;
     NF::Type{<:AbstractFloat}=Float64,
     grid_res::Union{AbstractString,Nothing}=nothing,
     Grid=FullGaussianGrid,
     dealiasing=2,
     nlat_half = round(Int, dealiasing*(resolution+1)*3/8), 
     nlayers=hidden_channels,
-    zsk::Bool=false
+    operator_type::Symbol=:driscoll_healy,
     )
     spectral_grid = zeros(LowerTriangularMatrix{Complex{NF}}, resolution+1, resolution+1)
     if !isnothing(grid_res)
@@ -13,16 +13,43 @@ function SphericalConv(resolution::Int, hidden_channels::Int;
     end
     S = SpectralTransform(spectral_grid, Grid=Grid, nlat_half=nlat_half, dealiasing=dealiasing, nlayers=nlayers)
     plan = ESM_PINOSpeedy(S, NF)
-    return ESM_PINO.SphericalConv(hidden_channels, resolution, plan, zsk)
+    return ESM_PINO.SphericalConv(hidden_channels, resolution, plan, operator_type, Int[])
 end
 
 function Lux.initialparameters(rng::AbstractRNG, layer::ESM_PINO.SphericalConv{ESM_PINOSpeedy})
-    init_std = layer.plan.NF(sqrt(1 / layer.hidden_channels))
-    if layer.zsk == true
-        weight = init_std * (randn(LowerTriangularArray{Complex{layer.plan.NF}}, layer.resolution + 1, 1, 1)) 
+    T_type = layer.plan.NF
+    init_std = T_type(sqrt(2 / layer.hidden_channels))
+    # Determine weight shape based on operator type
+    if layer.operator_type == :diagonal
+        # Shape: (out_channels, in_channels, lat_modes, lon_modes)
+        # For your case with same in/out channels: (hidden_channels, hidden_channels, modes, 2*modes-1)
+        weight = init_std * randn(rng, Complex{T_type}, 
+                                   layer.hidden_channels, 
+                                   layer.hidden_channels, 
+                                   layer.modes+1, 
+                                   layer.modes+1)
+        
+    elseif layer.operator_type == :block_diagonal
+        # Shape: (out_channels, in_channels, lat_modes, lon_modes, lon_modes)
+        # Extra dimension for matrix multiplication along longitude
+        weight = init_std * randn(rng, Complex{T_type},
+                                   layer.hidden_channels,
+                                   layer.hidden_channels,
+                                   layer.modes+1,
+                                   layer.modes+1,
+                                   layer.modes+1)
+        
+    elseif layer.operator_type == :driscoll_healy
+        # Shape: (out_channels, in_channels, lat_modes)
+        # Shared across all longitude modes
+        weight = init_std * randn(rng, Complex{T_type},
+                                   layer.hidden_channels,
+                                   layer.hidden_channels,
+                                   layer.modes+1)
     else
-        weight = init_std * (randn(LowerTriangularArray{Complex{layer.plan.NF}}, layer.resolution + 1, layer.resolution + 1, 1)) 
+        error("Unknown operator_type: $(layer.operator_type)")
     end
+    
     return (weight=weight,)
 end
 
@@ -31,20 +58,29 @@ function Lux.initialstates(rng::AbstractRNG, layer::ESM_PINO.SphericalConv{ESM_P
 end
 
 function (layer::ESM_PINO.SphericalConv{ESM_PINOSpeedy})(x::AbstractArray, ps::NamedTuple, st::NamedTuple) 
-    x_t = layer.plan.NF(x)
-    lat, lon, lev, batch_size = size(x_t)
-
-    x_res = reshape(x_t, (lat, lon, :))
-
-    x_field = FullGaussianGrid(x_res, input_as=Matrix)
+    x_t = layer.plan.NF.(x)
+    x_field = FullGaussianGrid(x_t, input_as=Matrix)
     x_tr = SpeedyTransforms.transform(x_field, layer.plan.spectral_transform)
-    #x_tr = Array(x_tr)<
-    x_p = x_tr .* ps.weight
-    #x_p = LowerTriangularArray(x_p)
+    x_tr = Array(x_tr)
+    # Apply operator based on type
+    if layer.operator_type == :diagonal
+        # einsum: "bilm,oilm->bolm"
+        x_p = ein"lmib,oilm->lmob"(x_tr, ps.weight)
+        x_res = x_tr
+        
+    elseif layer.operator_type == :block_diagonal
+        # einsum: "bilm,oilnm->boln"
+        x_p = ein"lmib,oilnm->lnob"(x_tr, ps.weight)
+        x_res = x_tr
+        
+    elseif layer.operator_type == :driscoll_healy
+        # einsum: "bilm,oil->bolm"
+        x_p = ein"lmib,oil->lmob"(x_tr, ps.weight)
+        x_res = x_tr
+    end
+    x_p = LowerTriangularArray(x_p)
     x_out_field = SpeedyTransforms.transform(x_p, layer.plan.spectral_transform)
-    
-    x_out_data = map(i -> Matrix(x_out_field[:,i]), 1:size(x_out_field,2))
-    x_out = reshape(cat(x_out_data..., dims=3), lat, lon, lev, batch_size)
+    x_out = reshape(Array(x_out_field), size(x))
     return  x_out, st
 end
 #=
