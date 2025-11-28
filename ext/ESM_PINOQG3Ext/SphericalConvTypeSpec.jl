@@ -33,7 +33,6 @@ function ESM_PINO.SphericalConv(
     for k in 1:corrected_modes-1
         push!(gpu_columns, [ggsh.FT_4d.i_imag+k+1, k+1]...)
     end
-    
     # Store in layer
     ESM_PINO.SphericalConv{ESM_PINOQG3}(hidden_channels, corrected_modes, plan, operator_type, gpu_columns)
 end
@@ -121,6 +120,37 @@ function Lux.initialparameters(rng::Random.AbstractRNG, layer::ESM_PINO.Spherica
 end
 
 Lux.initialstates(rng::Random.AbstractRNG, layer::ESM_PINO.SphericalConv{ESM_PINOQG3}) = NamedTuple()
+
+function LuxCore.display_name(layer::ESM_PINO.SphericalConv{ESM_PINOQG3})
+    # Extract grid sizes from the transforms
+    n_lat_shgg = layer.plan.shgg.output_size[1]  
+    n_lat_ggsh = size(layer.plan.ggsh.Pw, 1)
+    sh_size_ggsh = size(layer.plan.ggsh.Pw)[2:3]
+    sh_size_shgg = size(layer.plan.shgg.P)[2:3] 
+    
+    # Build the display string
+    parts = String[]
+    
+    # Main layer info with hidden channels
+    push!(parts, "SphericalConv($(layer.hidden_channels) channels")
+    
+    # Grid resolution information
+    push!(parts, "grid: $(n_lat_ggsh)→$(sh_size_ggsh)SH$(sh_size_shgg)→$(n_lat_shgg)")
+    
+    # Modes information (only show if non-zero)
+    if layer.modes > 0
+        push!(parts, "modes: $(layer.modes)")
+    end
+    
+    # Operator type
+    push!(parts, "op: $(layer.operator_type)")
+    
+    return join(parts, ", ") * ")"
+end
+
+function Base.show(io::IO, layer::ESM_PINO.SphericalConv{T}) where T
+    print(io, LuxCore.display_name(layer))
+end
 
 function (layer::ESM_PINO.SphericalConv{ESM_PINOQG3})(x::AbstractArray{T,4}, ps::NamedTuple, st::NamedTuple) where T
     @assert T == typeof(layer.plan.ggsh).parameters[1] "Input type $T does not match model parameter type $(typeof(layer.plan.ggsh).parameters[1]))"

@@ -9,24 +9,36 @@ const ESM_PINOQG3 = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext)
 const gdev = gpu_device()
 const cdev = cpu_device()
 
-dt = 1 #QG3.p.time_unit
-maxiters = 500
-hidden_channels = 20
+dt = 3 #QG3.p.time_unit
+maxiters = 250
+hidden_channels = 32
 batch_size = 10
 N_sims = 1000
+gpu = false
+modes = 32
+autoregressive_steps = 2
 
-qg3ppars, qg3p, S, solψ, solu = ESM_PINOQG3.load_precomputed_data(root=root, N_sims=N_sims, res="t21")
+if gpu
+    QG3.gpuon()
+else
+    QG3.gpuoff()
+end
+
+qg3ppars, qg3p, S, solψ, solu = ESM_PINOQG3.load_precomputed_data(root=root, N_sims=N_sims+(autoregressive_steps*dt), res="t42")
 #sol = cat(solψ, solu; dims=3)
-q_0, q_evolved, μ, σ, _ = ESM_PINOQG3.preprocess_data(solu, normalize=true)
+q_0, q_evolved, μ, σ, _ = ESM_PINOQG3.preprocess_data(solu, normalize=true, to_gpu=gpu, dt=dt, channelwise=true)
+
+autoregressive_target = ESM_PINOQG3.stack_time_steps(q_evolved, autoregressive_steps, dt=dt, N_sims=N_sims)
 
 ggsh_loss = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=N_sims)
 shgg_loss = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=N_sims)    
 
-pars = ESM_PINOQG3.QG3_Physics_Parameters(dt, qg3p, S, ggsh_loss, shgg_loss, μ, σ)
+pars = ESM_PINOQG3.QG3_Physics_Parameters(dt, qg3p, S, ggsh_loss, shgg_loss, μ, σ, gpu=gpu)
 
 trained_model = ESM_PINOQG3.train_model(q_0[:,:,:,1:N_sims], q_evolved[:,:,:,1:N_sims], qg3ppars, 
                                             maxiters=maxiters,
-                                            downsampling_factor=1, 
+                                            downsampling_factor=1,
+                                            modes=modes, 
                                             hidden_channels=hidden_channels, 
                                             parameters=pars, 
                                             batchsize=batch_size,
@@ -36,14 +48,12 @@ trained_model = ESM_PINOQG3.train_model(q_0[:,:,:,1:N_sims], q_evolved[:,:,:,1:N
                                             outer_skip=true,
                                             use_physics=false,
                                             geometric=true,
-                                            positional_embedding = "gaussian_grid"
+                                            positional_embedding = "grid",
+                                            gpu=gpu
                                             )
 trained_model_architecture = trained_model.model
 trained_model_ps = trained_model.ps
 trained_model_st = trained_model.st
-
-autoregressive_steps = 2
-autoregressive_target = ESM_PINOQG3.stack_time_steps(q_evolved, autoregressive_steps)
 
 GC.gc()
 CUDA.reclaim()
@@ -53,11 +63,12 @@ fine_tuned_model = ESM_PINOQG3.fine_tuning(q_0[:,:,:,1:N_sims], autoregressive_t
                                             use_physics=false,
                                             geometric=true,
                                             n_steps=autoregressive_steps,
-                                            maxiters=125
+                                            maxiters=125,
+                                            gpu=gpu
                                             )
 
 
 model = fine_tuned_model.model
 ps = cdev(fine_tuned_model.ps)
 st = cdev(fine_tuned_model.st)
-@save joinpath(root, "models/SFNO_results.jld2") model ps st
+@save joinpath(root, "models/SFNO_results.jld2") model ps st dt

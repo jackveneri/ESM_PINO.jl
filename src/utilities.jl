@@ -199,7 +199,26 @@ function normalize_data(data::AbstractArray; channelwise::Bool=false, dims::Unio
         return (data .- μ) ./ σ, μ, σ
     end
 end
-
+function normalize_data(data::AbstractArray, μ::Union{Real, AbstractArray},σ::Union{Real, AbstractArray})
+    channelwise = !(isa(σ, Real) && isa(μ, Real))
+    if channelwise
+        # (lat, lon, channel, batch) format
+        n_channels = size(data, 3)
+        
+        if length(μ) != n_channels || length(σ) != n_channels
+            throw(ArgumentError("μ and σ length ($(length(μ))) must match number of channels ($n_channels)"))
+        end
+        normalized_channels = [
+                (selectdim(data, 3, c).- μ[c]) ./ σ[c] 
+                for c in 1:n_channels
+            ]
+            
+        # Stack along the channel dimension
+        return permutedims(cat(normalized_channels...; dims=4),(1,2,4,3))
+    else
+        return (data .- μ) ./ σ
+    end    
+end
 """
     denormalize_data(normalized_data, μ, σ; channelwise=false)
 
@@ -225,8 +244,8 @@ data_original = denormalize_data(data_norm, μ, σ)
 data_original = denormalize_data(data_norm, μ_vec, σ_vec, channelwise=true)
 ```
 """
-function denormalize_data(normalized_data::AbstractArray, μ, σ; channelwise::Bool=false)
-    
+function denormalize_data(normalized_data::AbstractArray, μ, σ)
+    channelwise = !(isa(σ, Real) && isa(μ, Real))
     if channelwise
         # μ and σ should be vectors
         if !(μ isa AbstractVector && σ isa AbstractVector)
@@ -243,15 +262,14 @@ function denormalize_data(normalized_data::AbstractArray, μ, σ; channelwise::B
                 throw(ArgumentError("μ and σ length ($(length(μ))) must match number of channels ($n_channels)"))
             end
             
-            denormalized_data = similar(normalized_data)
+            # Create denormalized channels as a vector of arrays
+            denormalized_channels = [
+                selectdim(normalized_data, 3, c) .* σ[c] .+ μ[c]
+                for c in 1:n_channels
+            ]
             
-            for c in 1:n_channels
-                channel_data = selectdim(normalized_data, 3, c)
-                denormalized_channel = channel_data .* σ[c] .+ μ[c]
-                selectdim(denormalized_data, 3, c) .= denormalized_channel
-            end
-            
-            return denormalized_data
+            # Stack along the channel dimension
+            return permutedims(cat(denormalized_channels...; dims=4),(1,2,4,3))
             
         elseif ndims_data == 3
             # (lat, lon, channel) format
@@ -261,15 +279,14 @@ function denormalize_data(normalized_data::AbstractArray, μ, σ; channelwise::B
                 throw(ArgumentError("μ and σ length must match number of channels"))
             end
             
-            denormalized_data = similar(normalized_data)
+            # Create denormalized channels as a vector of arrays
+            denormalized_channels = [
+                selectdim(normalized_data, 3, c) .* σ[c] .+ μ[c]
+                for c in 1:n_channels
+            ]
             
-            for c in 1:n_channels
-                channel_data = selectdim(normalized_data, 3, c)
-                denormalized_channel = channel_data .* σ[c] .+ μ[c]
-                selectdim(denormalized_data, 3, c) .= denormalized_channel
-            end
-            
-            return denormalized_data
+            # Stack along the channel dimension
+            return cat(denormalized_channels...; dims=3)
         else
             throw(ArgumentError("Channel-wise denormalization expects 3D or 4D data"))
         end
@@ -412,7 +429,7 @@ function apply_n_times(f, x::AbstractArray, n::Int; m::Int=0, μ=0.0,  σ=1.0, c
     for i in 1:n
         y = f(y)
         if i in save_steps
-            push!(snapshots, copy(denormalize_data(y, μ, σ, channelwise=channelwise)))
+            push!(snapshots, copy(denormalize_data(y, μ, σ)))
         end
     end
 

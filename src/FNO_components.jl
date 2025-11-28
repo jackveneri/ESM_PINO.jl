@@ -266,6 +266,25 @@ function (layer::ChannelMLP)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     end
 end
 
+function Base.show(io::IO, layer::ChannelMLP)
+    input_channels = layer.mlp.layers[1].in_chs  
+    output_channels = layer.mlp.layers[2].out_chs 
+    hidden_channels = Int(layer.expansion_factor * input_channels)
+    
+    parts = String[]
+    push!(parts, "ChannelMLP($input_channels => $hidden_channels => $output_channels")
+    
+    if layer.skip != Lux.NoOpLayer()
+        push!(parts, "+soft_gating")
+    end
+    
+    if !Bool(layer.mlp.layers[2].use_bias)
+        push!(parts, "no_bias")
+    end
+    
+    print(io, join(parts, ", ") * ")")
+end
+
 """
     meshgrid(x, y)
 
@@ -325,6 +344,17 @@ end
 
 ChainRulesCore.@non_differentiable (layer::GridEmbedding2D)(::Any)
 
+function Base.show(io::IO, layer::GridEmbedding2D)
+    x_range = length(layer.boundaries_x) == 2 ? 
+        "($(layer.boundaries_x[1])..$(layer.boundaries_x[2]))" :
+        "[$(join(layer.boundaries_x, ", "))]"
+    
+    y_range = length(layer.boundaries_y) == 2 ? 
+        "($(layer.boundaries_y[1])..$(layer.boundaries_y[2]))" :
+        "[$(join(layer.boundaries_y, ", "))]"
+    
+    print(io, "GridEmbedding2D(x: $x_range, y: $y_range)")
+end
 """
 $(TYPEDSIGNATURES)
 A block that combines a SpectralKernel with optional normalization and a ChannelMLP.  

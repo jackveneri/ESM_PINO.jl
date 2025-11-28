@@ -103,6 +103,13 @@ function Lux.initialstates(rng::Random.AbstractRNG, layer::ESM_PINO.SphericalKer
     return (spatial=st_conv, norm=st_norm, spherical=st_spherical)
 end
 
+function Base.show(io::IO, layer::ESM_PINO.SphericalKernel{ESM_PINOQG3})
+    println(io, "SphericalKernel:")
+    println(io, "  spherical_conv: ", layer.spherical_conv)
+    println(io, "  spatial_conv: ", layer.spatial_conv)
+    println(io, "  norm: ", layer.norm)
+end
+
 function (layer::ESM_PINO.SphericalKernel{ESM_PINOQG3})(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     x_spherical, res_spherical, st_spherical = layer.spherical_conv(x, ps.spherical, st.spherical)
     x_spherical, st_norm = layer.norm(x_spherical, ps.norm, st.norm)
@@ -285,6 +292,13 @@ function Lux.apply(sfno_block::ESM_PINO.SFNO_Block{ESM_PINOQG3}, x::AbstractArra
         x_out = x_mlp
     end
     return x_out, (spherical_kernel=st_spherical, channel_mlp=st_channel)
+end
+
+function Base.show(io::IO, block::ESM_PINO.SFNO_Block{ESM_PINOQG3})
+    println(io, "SFNO_Block:")
+    println(io, "  spherical_kernel: ", block.spherical_kernel)
+    println(io, "  channel_mlp: ", block.channel_mlp)
+    println(io, "  channels: $(block.channels), skip: $(block.skip)")
 end
 #=
 using JLD2

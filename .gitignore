@@ -8,5 +8,6 @@
 /models/
 /examples/experiment.jl
 /examples/plotting_tests.jl
+/examples/speedy_experiment.jl
 /figures
 /data/Manifest.toml

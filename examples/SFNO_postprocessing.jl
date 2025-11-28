@@ -55,7 +55,7 @@ ESM_PINO.analyze_weights(ps)
 
 q = QG3.reorder_SH_gpu(q, qg3p.p)
 solu = permutedims(QG3.transform_grid_data(q, qg3p),(2,3,1,4))
-solu, μ, σ = ESM_PINO.normalize_data(solu)
+solu, μ, σ = ESM_PINO.normalize_data(solu, channelwise=true)
 
 N_test = 100
 shgg2 = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=N_test)
@@ -67,7 +67,7 @@ trained_u = Lux.testmode(StatefulLuxLayer{true}(test_model, ps, st))
 
 q_test, q_test_targets, _, _  = ESM_PINOQG3.preprocess_data(solu[:,:,:,1001:1100+dt], normalize=false, noise_level=0, dt=dt)
 q_test, q_test_targets = transfer_data(q_test, dev), transfer_data(q_test_targets, dev)
-q_test_evolved = ESM_PINO.denormalize_data(q_test_targets, μ, σ)
+q_test_evolved = ESM_PINO.denormalize_data(q_test_targets, μ, σ, channelwise=true)
 
 q_test_array = transfer_data(Float32.(q_test), dev)
 GC.gc()
