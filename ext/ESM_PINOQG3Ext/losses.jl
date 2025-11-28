@@ -96,7 +96,13 @@ end
 mse_loss_function_QG3(u, target, input) =
     Lux.MSELoss()(u(input), target)
 
-# Geometrically weighted MSE loss
+# Geometrically weighted MSE losses
+function geometric_mse_loss_function_QG3(output::AbstractArray, target::AbstractArray, pars::QG3_Physics_Parameters)
+        w = pars.weights
+        geom_cw_loss = sqrt.(sum(@.((output - target)^2 * w), dims=(1,2)) ./
+                            sum(@.( target^2 * w), dims=(1,2)))
+        return sum(geom_cw_loss) / length(geom_cw_loss)
+end
 function geometric_mse_loss_function_QG3(u, target, input, pars::QG3_Physics_Parameters)
     @views begin
         w = pars.weights

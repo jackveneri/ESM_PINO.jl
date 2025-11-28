@@ -259,7 +259,7 @@ pred = trained_model(x)
 """
 function train_model(
     x::AbstractArray, 
-    target::AbstractArray, 
+    target::AbstractArray,
     pars::QG3ModelParameters;
     seed::Int=0,
     maxiters::Int=20, 
@@ -375,6 +375,252 @@ function train_model(
         end
     end
     QG3.gpuon()
+    return StatefulLuxLayer{true}(sfno, train_state.parameters, train_state.states)
+end
+function train_model(
+    x::AbstractArray, 
+    target::AbstractArray,
+    x_val::AbstractArray,
+    target_val::AbstractArray, 
+    pars::QG3ModelParameters;
+    seed::Int=0,
+    nepochs::Int=20,  # Changed from maxiters to nepochs to match Python
+    batchsize::Int=8,
+    num_examples::Int=256,  # Number of training samples per epoch
+    num_valid::Int=8,       # Number of validation samples per epoch
+    modes::Int=pars.L,
+    in_channels::Int=size(x, 3),
+    out_channels::Int=size(target, 3),
+    hidden_channels::Int=256,
+    n_layers::Int=4,
+    lifting_channel_ratio::Int=2,
+    projection_channel_ratio::Int=2,
+    channel_mlp_expansion::Number=2.0,
+    activation=NNlib.gelu,
+    positional_embedding::AbstractString="no_grid",
+    inner_skip::Bool=true,
+    outer_skip::Bool=true,
+    operator_type::Symbol=:driscoll_healy,
+    use_norm::Bool=false,
+    downsampling_factor::Int=2,
+    lr_0::Float64=2e-3,
+    gpu::Bool=true, 
+    parameters::QG3_Physics_Parameters=QG3_Physics_Parameters(pars, batch_size=batchsize, gpu=gpu),
+    use_physics=true, 
+    geometric=true,
+    α=0.7f0,
+    nfuture::Int=0,  # Added to match Python version
+    logging::Bool=true,
+)
+    
+    train_start = time()
+    rng = Random.default_rng(seed)
+    
+    # Get total dataset sizes
+    n_train_total = size(x, 4)
+    n_val_total = size(x_val, 4)
+    
+    # Validate parameters
+    @assert num_examples <= n_train_total "num_examples ($num_examples) cannot exceed training set size ($n_train_total)"
+    @assert num_valid <= n_val_total "num_valid ($num_valid) cannot exceed validation set size ($n_val_total)"
+    @assert num_examples % batchsize == 0 "num_examples ($num_examples) must be a multiple of batchsize ($batchsize)"
+    @assert num_valid % batchsize == 0 "num_valid ($num_valid) must be a multiple of batchsize ($batchsize)"
+    
+    if gpu
+        device_fn = gpu_device()
+    else
+        device_fn = cpu_device()
+        QG3.gpuoff()
+    end
+    
+    # ===== SETUP FIXED VALIDATION SET =====
+    # Sample validation set once and keep it fixed across all epochs
+    val_indices = randperm(rng, n_val_total)[1:num_valid]
+    x_val_fixed = x_val[:, :, :, val_indices]
+    target_val_fixed = target_val[:, :, :, val_indices]
+    
+    # Create validation dataloader once (will be reused each epoch)
+    val_dataloader = DataLoader((x_val_fixed, target_val_fixed); 
+                               batchsize=batchsize, shuffle=false) |> device_fn
+    
+    if logging
+        println("Training setup:")
+        println("  - Training samples per epoch: $num_examples")
+        println("  - Validation samples (fixed): $num_valid")
+        println("  - Batch size: $batchsize")
+        println("  - Training batches per epoch: $(num_examples ÷ batchsize)")
+        println("  - Validation batches per epoch: $(num_valid ÷ batchsize)")
+    end
+    
+    # Create the model
+    sfno = SFNO(pars,
+        batch_size=batchsize,
+        modes=modes,
+        in_channels=in_channels, 
+        out_channels=out_channels, 
+        n_layers=n_layers,
+        hidden_channels=hidden_channels, 
+        positional_embedding=positional_embedding,
+        lifting_channel_ratio=lifting_channel_ratio,
+        projection_channel_ratio=projection_channel_ratio,
+        channel_mlp_expansion=channel_mlp_expansion,
+        activation=activation,
+        inner_skip=inner_skip,
+        outer_skip=outer_skip,
+        operator_type=operator_type,
+        downsampling_factor=downsampling_factor,
+        use_norm=use_norm,
+        gpu=gpu
+    )
+    
+    if gpu
+        ps, st = Lux.setup(rng, sfno) |> gpu_device()
+    else
+        ps, st = Lux.setup(rng, sfno) |> cpu_device()
+    end
+    @assert st isa NamedTuple "Model state should be a NamedTuple"
+    
+    # Setup optimizer and training state
+    opt = Optimisers.ADAM(lr_0)
+    train_state = Training.TrainState(sfno, ps, st, opt)
+    
+    # Setup physics parameters if provided
+    if !isnothing(parameters)
+        par_train = QG3_Physics_Parameters(
+            parameters.dt,
+            parameters.qg3p,
+            parameters.S,
+            QG3.GaussianGridtoSHTransform(pars, N_batch=batchsize),
+            QG3.SHtoGaussianGridTransform(pars, N_batch=batchsize),
+            parameters.μ,
+            parameters.σ,
+            gpu=gpu
+        )
+    else
+        par_train = nothing
+    end
+    
+    # Create loss function
+    QG3_loss = make_QG3_loss(par_train; geometric=geometric, use_physics=use_physics, α=α)
+    
+    # Setup online statistics trackers for running averages
+    total_loss_tracker = Lag(Float32, 32)
+    physics_loss_tracker = Lag(Float32, 32)
+    data_loss_tracker = Lag(Float32, 32)
+    
+    # Global iteration counter
+    total_iters = 0
+    
+    # ========== TRAINING LOOP ==========
+    for epoch in 1:nepochs
+        epoch_start = time()
+        
+        # ===== SAMPLE RANDOM SUBSET FOR TRAINING THIS EPOCH =====
+        # Training: sample num_examples randomly each epoch
+        train_indices = randperm(rng, n_train_total)[1:num_examples]
+        x_train_epoch = x[:, :, :, train_indices]
+        target_train_epoch = target[:, :, :, train_indices]
+        
+        # Create training dataloader for this epoch
+        train_dataloader = DataLoader((x_train_epoch, target_train_epoch); 
+                                     batchsize=batchsize, shuffle=true) |> device_fn
+        
+        # ===== TRAINING PHASE =====
+        accumulated_loss = 0.0
+        accumulated_physics_loss = 0.0
+        accumulated_data_loss = 0.0
+        n_train_samples = 0
+        
+        for (x_batch, target_batch) in train_dataloader
+            # Forward pass with potential multi-step rollout
+            _, loss, stats, train_state = Training.single_train_step!(
+                AutoZygote(), 
+                QG3_loss, 
+                (x_batch, target_batch), 
+                train_state
+            )
+            
+            # Update online statistics trackers
+            fit!(total_loss_tracker, Float32(loss))
+            fit!(physics_loss_tracker, Float32(stats.physics_loss))
+            fit!(data_loss_tracker, Float32(stats.data_loss))
+            
+            # Accumulate losses (weighted by batch size)
+            batch_size_actual = size(x_batch, 4)  # Assuming batch is last dimension
+            accumulated_loss += loss * batch_size_actual
+            accumulated_physics_loss += stats.physics_loss * batch_size_actual
+            accumulated_data_loss += stats.data_loss * batch_size_actual
+            n_train_samples += batch_size_actual
+            
+            # Check for NaN
+            isnan(loss) && throw(ArgumentError("NaN Loss Detected at epoch $epoch, iteration $total_iters"))
+            
+            total_iters += 1
+        end
+        
+        # Average training losses for this epoch
+        train_loss = accumulated_loss / n_train_samples
+        train_physics_loss = accumulated_physics_loss / n_train_samples
+        train_data_loss = accumulated_data_loss / n_train_samples
+        
+        # Running averages from online stats
+        mean_total_loss = mean(OnlineStats.value(total_loss_tracker))
+        mean_physics_loss = mean(OnlineStats.value(physics_loss_tracker))
+        mean_data_loss = mean(OnlineStats.value(data_loss_tracker))
+        
+        # ===== VALIDATION PHASE =====
+        valid_loss = 0.0
+        n_valid_samples = 0
+        trained_u = Lux.testmode(StatefulLuxLayer{true}(sfno, train_state.parameters, train_state.states))
+        # Validation loop (no gradient computation)
+        for (x_batch, target_batch) in val_dataloader
+            # Forward pass only (no training step)
+            # You may need to implement a separate validation function
+            # For now, computing loss without updating weights
+            model_output = trained_u(x_batch)
+            
+            # Apply multi-step rollout if needed
+            for _ in 1:nfuture
+                model_output = trained_u(model_output)
+            end
+            
+            # Compute loss (this should match your loss function structure)
+            if geometric 
+                loss_val = geometric_mse_loss_function_QG3(model_output, target_batch, par_train)
+            else
+                loss_val = Lux.MSELoss()(model_output, target_batch)
+            end
+            batch_size_actual = size(x_batch, 4)
+            valid_loss += loss_val * batch_size_actual
+            n_valid_samples += batch_size_actual
+        end
+        
+        # Average validation losses
+        valid_loss = valid_loss / n_valid_samples
+        
+        epoch_time = time() - epoch_start
+        
+        # ===== LOGGING =====
+        if logging
+            println("="^80)
+            @printf "Epoch: [%3d / %3d] \t Time: %.2f s\n" epoch nepochs epoch_time
+            println("-"^80)
+            @printf "Training Loss:     %.9f (running avg: %.9f)\n" train_loss mean_total_loss
+            @printf "  Physics Loss:    %.9f (running avg: %.9f)\n" train_physics_loss mean_physics_loss
+            @printf "  Data Loss:       %.9f (running avg: %.9f)\n" train_data_loss mean_data_loss
+            println("-"^80)
+            @printf "Validation Loss(Computed as Data Loss only):   %.9f\n" valid_loss
+        end
+        
+        GC.gc()  # Garbage collection after each epoch
+    end
+    
+    train_time = time() - train_start
+    println("="^80)
+    @printf "Training complete. Total time: %.2f seconds\n" train_time
+    
+    QG3.gpuon()
+    
     return StatefulLuxLayer{true}(sfno, train_state.parameters, train_state.states)
 end
 """
@@ -587,10 +833,11 @@ end
         channelwise::Bool=false,
         to_gpu::Bool=false,
         noise_type::Symbol=:gaussian,
-        slice_range::Union{Nothing, UnitRange, Tuple}=nothing
+        slice_range::Union{Nothing, UnitRange, Tuple}=nothing,
+        train_fraction::Real=0.8
     )
 
-Preprocess simulation data with normalization and noise injection options.
+Preprocess simulation data with normalization, noise injection, and train/validation splitting.
 
 # Keyword Arguments
 - `noise_level::Real=0.0`: Standard deviation of noise to add (0.0 = no noise)
@@ -599,42 +846,32 @@ Preprocess simulation data with normalization and noise injection options.
 - `to_gpu::Bool=false`: If true, transfer data to GPU after preprocessing
 - `noise_type::Symbol=:gaussian`: Type of noise (:gaussian, :uniform, :salt_pepper)
 - `slice_range::Union{Nothing, UnitRange, Tuple}=nothing`: Optional range(s) to slice data
-  - Can be a single UnitRange for the batch dimension
-  - Can be a Tuple of ranges for multiple dimensions: (lat_range, lon_range, channel_range, batch_range)
+- `train_fraction::Real=0.8`: Fraction of data to use for training (rest used for validation)
 
 # Returns
-- `q_0`: Initial conditions (preprocessed)
-- `q_evolved`: Evolved states (preprocessed)
-- `μ`: Mean(s) used for normalization (scalar or vector)
-- `σ`: Std(s) used for normalization (scalar or vector)
+- `q_0_train`: Training initial conditions
+- `q_evolved_train`: Training evolved states
+- `q_0_val`: Validation initial conditions
+- `q_evolved_val`: Validation evolved states
+- `μ`: Mean(s) used for normalization
+- `σ`: Std(s) used for normalization
 - `normalization_params`: NamedTuple with normalization metadata
 
 # Examples
 ```julia
-# Basic usage - no preprocessing
-q_0, q_evolved, μ, σ, params = preprocess_data(noise_level=0.0, normalize=false)
+# Basic usage with 80% train, 20% validation
+q0_tr, qe_tr, q0_val, qe_val, μ, σ, params = preprocess_data(
+    normalize=true,
+    train_fraction=0.8
+)
 
-# Normalize globally with noise
-q_0, q_evolved, μ, σ, params = preprocess_data(noise_level=0.01, normalize=true)
-
-# Channel-wise normalization with noise and GPU transfer
-q_0, q_evolved, μ, σ, params = preprocess_data(
-    noise_level=0.01, 
-    normalize=true, 
+# Custom train/val split with noise
+q0_tr, qe_tr, q0_val, qe_val, μ, σ, params = preprocess_data(
+    noise_level=0.01,
+    normalize=true,
     channelwise=true,
+    train_fraction=0.7,
     to_gpu=true
-)
-
-# Slice data: take first 100 samples from batch dimension
-q_0, q_evolved, μ, σ, params = preprocess_data(
-    slice_range=1:100,
-    normalize=true
-)
-
-# Advanced slicing: specify ranges for all dimensions
-q_0, q_evolved, μ, σ, params = preprocess_data(
-    slice_range=(1:48, 1:96, 1:3, 1:100),  # (lat, lon, channel, batch)
-    normalize=true
 )
 ```
 """
@@ -647,8 +884,11 @@ function preprocess_data(;
     relative::Bool=true,
     rng::AbstractRNG=Random.GLOBAL_RNG,
     slice_range::Union{Nothing, UnitRange, Tuple}=nothing,
-    dt::Int=1
-)
+    dt::Int=1,
+    train_fraction::Real=0.8
+) 
+    # Validate train_fraction
+    @assert 0.0 <= train_fraction < 1.0 "train_fraction must be between 0 and 1"
     
     # Load raw data
     qg3ppars, qg3p, S, solψ, solu = load_precomputed_data()
@@ -656,10 +896,8 @@ function preprocess_data(;
     # Apply slicing if requested
     if !isnothing(slice_range)
         if slice_range isa UnitRange
-            # Single range = slice batch dimension only
             solu = solu[:, :, :, slice_range]
         elseif slice_range isa Tuple
-            # Multiple ranges for different dimensions
             if length(slice_range) == 4
                 lat_r, lon_r, ch_r, batch_r = slice_range
                 solu = solu[lat_r, lon_r, ch_r, batch_r]
@@ -683,20 +921,16 @@ function preprocess_data(;
     end
     
     # Split into initial conditions and evolved states
-    # Ensure we have at least 2 time steps
     if n_total_samples < 2
         throw(ArgumentError("Need at least 2 time steps in data, got $n_total_samples"))
     end
     
-    # q_0: initial conditions (all samples except last)
     q_0 = solu[:, :, :, 1:end-dt]
-    
-    # q_evolved: evolved states (all samples except first)
     q_evolved = solu[:, :, :, 1+dt:end]
     
     # Add noise if requested
     if noise_level > 0
-        q_0 = Array(q_0)  # Ensure it's on CPU for noise injection
+        q_0 = Array(q_0)
         q_evolved = Array(q_evolved)
         
         q_0 = ESM_PINO.add_noise(q_0, noise_level=noise_level, noise_type=noise_type, relative=relative, rng=rng)
@@ -706,31 +940,74 @@ function preprocess_data(;
     else
         @info "No noise added"
     end
-    
-    # GPU transfer if requested
-    if to_gpu
-        q_0 = QG3.togpu(q_0)
-        q_evolved = QG3.togpu(q_evolved)
-        @info "Data transferred to GPU"
+    if train_fraction > 0
+        # Split into train and validation sets
+        n_pairs = size(q_0, 4)
+        n_train = floor(Int, n_pairs * train_fraction)
+        n_val = n_pairs - n_train
+        
+        # Split along batch dimension
+        q_0_train = q_0[:, :, :, 1:n_train]
+        q_evolved_train = q_evolved[:, :, :, 1:n_train]
+        q_0_val = q_0[:, :, :, n_train+1:end]
+        q_evolved_val = q_evolved[:, :, :, n_train+1:end]
+        
+        @info "Data split" n_train n_val train_fraction
+        
+        # GPU transfer if requested
+        if to_gpu
+            q_0_train = QG3.togpu(q_0_train)
+            q_evolved_train = QG3.togpu(q_evolved_train)
+            q_0_val = QG3.togpu(q_0_val)
+            q_evolved_val = QG3.togpu(q_evolved_val)
+            @info "Data transferred to GPU"
+        else
+            @info "Data kept on CPU"
+        end
+        
+        # Store preprocessing metadata
+        normalization_params = (
+            normalized=normalize,
+            channelwise=channelwise,
+            μ=μ,
+            σ=σ,
+            noise_level=noise_level,
+            noise_type=noise_type,
+            original_shape=data_shape,
+            n_train=n_train,
+            n_val=n_val,
+            train_fraction=train_fraction,
+            on_gpu=to_gpu
+        )
+        
+        return q_0_train, q_evolved_train, q_0_val, q_evolved_val, μ, σ, normalization_params
     else
-        @info "Data kept on CPU"
-    end
-    
-    # Store preprocessing metadata
-    normalization_params = (
-        normalized=normalize,
-        channelwise=channelwise,
-        μ=μ,
-        σ=σ,
-        noise_level=noise_level,
-        noise_type=noise_type,
-        original_shape=data_shape,
-        n_pairs=size(q_0, 4),
-        on_gpu=to_gpu
-    )
-    
-    return q_0, q_evolved, μ, σ, normalization_params
+            # GPU transfer if requested
+        if to_gpu
+            q_0 = QG3.togpu(q_0)
+            q_evolved = QG3.togpu(q_evolved)
+            @info "Data transferred to GPU"
+        else
+            @info "Data kept on CPU"
+        end
+        
+        # Store preprocessing metadata
+        normalization_params = (
+            normalized=normalize,
+            channelwise=channelwise,
+            μ=μ,
+            σ=σ,
+            noise_level=noise_level,
+            noise_type=noise_type,
+            original_shape=data_shape,
+            n_pairs=size(q_0, 4),
+            on_gpu=to_gpu
+        )
+        
+        return q_0, q_evolved, μ, σ, normalization_params
+    end    
 end
+
 """
     preprocess_data(solu::AbstractArray;
         noise_level::Real=0.0,
@@ -738,13 +1015,14 @@ end
         channelwise::Bool=false,
         to_gpu::Bool=false,
         noise_type::Symbol=:gaussian,
-        slice_range::Union{Nothing, UnitRange, Tuple}=nothing
+        slice_range::Union{Nothing, UnitRange, Tuple}=nothing,
+        train_fraction::Real=0.8
     )
 
-Preprocess simulation data with normalization and noise injection options.
+Preprocess simulation data with normalization, noise injection, and train/validation splitting.
 
-#Arguments
--`solu::AbstractArray`: Raw simulation data array of shape (lat, lon, channel, time)
+# Arguments
+- `solu::AbstractArray`: Raw simulation data array of shape (lat, lon, channel, time)
 
 # Keyword Arguments
 - `noise_level::Real=0.0`: Standard deviation of noise to add (0.0 = no noise)
@@ -753,44 +1031,16 @@ Preprocess simulation data with normalization and noise injection options.
 - `to_gpu::Bool=false`: If true, transfer data to GPU after preprocessing
 - `noise_type::Symbol=:gaussian`: Type of noise (:gaussian, :uniform, :salt_pepper)
 - `slice_range::Union{Nothing, UnitRange, Tuple}=nothing`: Optional range(s) to slice data
-  - Can be a single UnitRange for the batch dimension
-  - Can be a Tuple of ranges for multiple dimensions: (lat_range, lon_range, channel_range, batch_range)
+- `train_fraction::Real=0.8`: Fraction of data to use for training (rest used for validation)
 
 # Returns
-- `q_0`: Initial conditions (preprocessed)
-- `q_evolved`: Evolved states (preprocessed)
-- `μ`: Mean(s) used for normalization (scalar or vector)
-- `σ`: Std(s) used for normalization (scalar or vector)
+- `q_0_train`: Training initial conditions
+- `q_evolved_train`: Training evolved states
+- `q_0_val`: Validation initial conditions
+- `q_evolved_val`: Validation evolved states
+- `μ`: Mean(s) used for normalization
+- `σ`: Std(s) used for normalization
 - `normalization_params`: NamedTuple with normalization metadata
-
-# Examples
-```julia
-# Basic usage - no preprocessing
-q_0, q_evolved, μ, σ, params = preprocess_data(noise_level=0.0, normalize=false)
-
-# Normalize globally with noise
-q_0, q_evolved, μ, σ, params = preprocess_data(noise_level=0.01, normalize=true)
-
-# Channel-wise normalization with noise and GPU transfer
-q_0, q_evolved, μ, σ, params = preprocess_data(
-    noise_level=0.01, 
-    normalize=true, 
-    channelwise=true,
-    to_gpu=true
-)
-
-# Slice data: take first 100 samples from batch dimension
-q_0, q_evolved, μ, σ, params = preprocess_data(
-    slice_range=1:100,
-    normalize=true
-)
-
-# Advanced slicing: specify ranges for all dimensions
-q_0, q_evolved, μ, σ, params = preprocess_data(
-    slice_range=(1:48, 1:96, 1:3, 1:100),  # (lat, lon, channel, batch)
-    normalize=true
-)
-```
 """
 function preprocess_data(solu::AbstractArray;
     normalize::Bool=true,
@@ -801,16 +1051,17 @@ function preprocess_data(solu::AbstractArray;
     relative::Bool=true,
     rng::AbstractRNG=Random.GLOBAL_RNG,
     slice_range::Union{Nothing, UnitRange, Tuple}=nothing,
-    dt::Int=1
+    dt::Int=1,
+    train_fraction::Real=0.8
 )
     @assert ndims(solu) == 4 "Input data solu must be a 4D array (lat, lon, channel, time)"
+    @assert 0.0 <= train_fraction < 1.0 "train_fraction must be between 0 and 1"
+    
     # Apply slicing if requested
     if !isnothing(slice_range)
         if slice_range isa UnitRange
-            # Single range = slice batch dimension only
             solu = solu[:, :, :, slice_range]
         elseif slice_range isa Tuple
-            # Multiple ranges for different dimensions
             if length(slice_range) == 4
                 lat_r, lon_r, ch_r, batch_r = slice_range
                 solu = solu[lat_r, lon_r, ch_r, batch_r]
@@ -834,20 +1085,16 @@ function preprocess_data(solu::AbstractArray;
     end
     
     # Split into initial conditions and evolved states
-    # Ensure we have at least 2 time steps
     if n_total_samples < 2
         throw(ArgumentError("Need at least 2 time steps in data, got $n_total_samples"))
     end
     
-    # q_0: initial conditions (all samples except last)
     q_0 = solu[:, :, :, 1:end-dt]
-    
-    # q_evolved: evolved states (all samples except first)
     q_evolved = solu[:, :, :, 1+dt:end]
     
     # Add noise if requested
     if noise_level > 0
-        q_0 = Array(q_0)  # Ensure it's on CPU for noise injection
+        q_0 = Array(q_0)
         q_evolved = Array(q_evolved)
         
         q_0 = ESM_PINO.add_noise(q_0, noise_level=noise_level, noise_type=noise_type, relative=relative, rng=rng)
@@ -857,28 +1104,70 @@ function preprocess_data(solu::AbstractArray;
     else
         @info "No noise added"
     end
-    
-    # GPU transfer if requested
-    if to_gpu
-        q_0 = QG3.togpu(q_0)
-        q_evolved = QG3.togpu(q_evolved)
-        @info "Data transferred to GPU"
+    if train_fraction > 0
+        # Split into train and validation sets
+        n_pairs = size(q_0, 4)
+        n_train = floor(Int, n_pairs * train_fraction)
+        n_val = n_pairs - n_train
+        
+        # Split along batch dimension
+        q_0_train = q_0[:, :, :, 1:n_train]
+        q_evolved_train = q_evolved[:, :, :, 1:n_train]
+        q_0_val = q_0[:, :, :, n_train+1:end]
+        q_evolved_val = q_evolved[:, :, :, n_train+1:end]
+        
+        @info "Data split" n_train n_val train_fraction
+        
+        # GPU transfer if requested
+        if to_gpu
+            q_0_train = QG3.togpu(q_0_train)
+            q_evolved_train = QG3.togpu(q_evolved_train)
+            q_0_val = QG3.togpu(q_0_val)
+            q_evolved_val = QG3.togpu(q_evolved_val)
+            @info "Data transferred to GPU"
+        else
+            @info "Data kept on CPU"
+        end
+        
+        # Store preprocessing metadata
+        normalization_params = (
+            normalized=normalize,
+            channelwise=channelwise,
+            μ=μ,
+            σ=σ,
+            noise_level=noise_level,
+            noise_type=noise_type,
+            original_shape=data_shape,
+            n_train=n_train,
+            n_val=n_val,
+            train_fraction=train_fraction,
+            on_gpu=to_gpu
+        )
+        
+        return q_0_train, q_evolved_train, q_0_val, q_evolved_val, μ, σ, normalization_params
     else
-        @info "Data kept on CPU"
+        # GPU transfer if requested
+        if to_gpu
+            q_0 = QG3.togpu(q_0)
+            q_evolved = QG3.togpu(q_evolved)
+            @info "Data transferred to GPU"
+        else
+            @info "Data kept on CPU"
+        end
+        
+        # Store preprocessing metadata
+        normalization_params = (
+            normalized=normalize,
+            channelwise=channelwise,
+            μ=μ,
+            σ=σ,
+            noise_level=noise_level,
+            noise_type=noise_type,
+            original_shape=data_shape,
+            n_pairs=size(q_0, 4),
+            on_gpu=to_gpu
+        )
+        
+        return q_0, q_evolved, μ, σ, normalization_params 
     end
-    
-    # Store preprocessing metadata
-    normalization_params = (
-        normalized=normalize,
-        channelwise=channelwise,
-        μ=μ,
-        σ=σ,
-        noise_level=noise_level,
-        noise_type=noise_type,
-        original_shape=data_shape,
-        n_pairs=size(q_0, 4),
-        on_gpu=to_gpu
-    )
-    
-    return q_0, q_evolved, μ, σ, normalization_params
 end

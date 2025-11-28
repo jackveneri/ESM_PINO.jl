@@ -108,6 +108,13 @@ function Lux.initialstates(rng::AbstractRNG, layer::GaussianGridEmbedding2D)
     return NamedTuple()
 end
 
+function Base.show(io::IO, layer::GaussianGridEmbedding2D)
+    lat_range = "($(layer.normalize_lat[1])..$(layer.normalize_lat[2]))"
+    lon_range = "($(layer.normalize_lon[1])..$(layer.normalize_lon[2]))"
+    
+    print(io, "GaussianGridEmbedding2D(lat: $lat_range, lon: $lon_range)")
+end
+
 function (layer::GaussianGridEmbedding2D)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     height, width, channels, batch_size = size(x)
     
