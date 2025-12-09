@@ -41,7 +41,7 @@ model_string = "SFNO"
 GC.gc()
 CUDA.reclaim()
 
-@load string(root,"/models/",model_string,"_results.jld2") model ps st dt
+@load string(root,"/models/",model_string,"_results.jld2") model ps st dt N_sims μ σ
 dev = get_device(model)
 const ESM_PINOQG3 = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext)
 
@@ -55,8 +55,7 @@ ESM_PINO.analyze_weights(ps)
 
 q = QG3.reorder_SH_gpu(q, qg3p.p)
 solu = permutedims(QG3.transform_grid_data(q, qg3p),(2,3,1,4))
-solu, μ, σ = ESM_PINO.normalize_data(solu, channelwise=true)
-
+solu = ESM_PINO.normalize_data(solu, μ, σ)
 N_test = 100
 shgg2 = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=N_test)
 ggsh2 = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=N_test)
@@ -65,20 +64,20 @@ ps, st = transfer_data(ps, dev), transfer_data(st, dev)
 
 trained_u = Lux.testmode(StatefulLuxLayer{true}(test_model, ps, st))
 
-q_test, q_test_targets, _, _  = ESM_PINOQG3.preprocess_data(solu[:,:,:,1001:1100+dt], normalize=false, noise_level=0, dt=dt)
+q_test, q_test_targets, _, _  = ESM_PINOQG3.preprocess_data(solu[:,:,:,N_sims+301:N_sims+300+N_test+dt], normalize=false, noise_level=0, dt=dt, train_fraction=0)
 q_test, q_test_targets = transfer_data(q_test, dev), transfer_data(q_test_targets, dev)
-q_test_evolved = ESM_PINO.denormalize_data(q_test_targets, μ, σ, channelwise=true)
+q_test_evolved = ESM_PINO.denormalize_data(q_test_targets, μ, σ)
 
 q_test_array = transfer_data(Float32.(q_test), dev)
 GC.gc()
 CUDA.reclaim()
-q_pred = ESM_PINO.denormalize_data(trained_u(q_test_array),μ, σ)
+q_pred = ESM_PINO.denormalize_data(trained_u(q_test_array), μ, σ)
 
 one_step_L2_rel_err = mean(abs2, to_array(q_pred, dev) .- to_array(q_test_evolved, dev)) / 
                       mean(abs2, to_array(q_test_evolved, dev))
 println("One-step Relative L2 Error: ", one_step_L2_rel_err)
 
-q_test_rollout = q_test_array[:, :, :, 1:1]
+q_test_rollout = q_test_array[:, :, :, 2:2]
 
 test_model_autoreg = ESM_PINOQG3.transfer_SFNO_model(model, qg3ppars, batch_size=1)
 trained_u_autoreg = Lux.testmode(StatefulLuxLayer{true}(test_model_autoreg, ps, st))
@@ -156,8 +155,8 @@ long_rollout_iter = Int(long_rollout_t_steps ÷ dt)
 snapshots = min(100, long_rollout_iter)
 time_scale_adjust = Int(round(long_rollout_t_steps / (snapshots-1)))
 
-ggsh3 = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=long_rollout_iter)
-shgg3 = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=long_rollout_iter)
+ggsh3 = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=snapshots)
+shgg3 = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=snapshots)
 
 q_stable = ESM_PINO.apply_n_times(trained_u_autoreg, q_test_rollout, long_rollout_iter; m=snapshots, μ=μ, σ=σ)
 q_stable = cat(q_stable..., dims=4)
@@ -184,3 +183,21 @@ for ilvl in 1:3
                          it * qg3ppars.time_unit * time_scale_adjust)
     end
 end
+fig = Figure()
+ax = Axis(fig[1, 1], yscale = log10)
+rollout_length = 10
+# Plot the angular power spectrum
+lines!(ax, QG3.angular_power_spectrum(q_pred_sh[1,:,:,rollout_length], qg3ppars), label="pred_power_spectrum after AR rollout of $(rollout_length) steps")
+lines!(ax, QG3.angular_power_spectrum(q_pred_sh[1,:,:,1], qg3ppars), label="pred_power_spectrum after 1 step of length $(dt) QG3 time units")
+lines!(ax, QG3.angular_power_spectrum(q_test_evolved_sh[1,:,:,1+rollout_length*dt], qg3ppars), label="real_data_power_spectrum after $(1+rollout_length*dt) QG3 time units")
+lines!(ax, QG3.angular_power_spectrum(q_test_evolved_sh[1,:,:,1+dt], qg3ppars), label="real_data_power_spectrum after 1 step of length $(dt) QG3 time units")
+
+# Optional: Add labels
+ax.xlabel = "ℓ"
+ax.ylabel = "Power Spectrum"
+ax.title = "Angular Power Spectrum"
+
+axislegend(ax, position=:rb)  # right bottom
+display(fig)
+
+save(string(root, "/figures/power_spectrum.png"), fig)

@@ -6,6 +6,7 @@ function ESM_PINO.SphericalConv(resolution::Int, hidden_channels::Int;
     nlat_half = round(Int, dealiasing*(resolution+1)*3/8), 
     nlayers=hidden_channels,
     operator_type::Symbol=:driscoll_healy,
+    gain::Real=2.0
     )
     spectral_grid = zeros(LowerTriangularMatrix{Complex{NF}}, resolution+1, resolution+1)
     if !isnothing(grid_res)
@@ -13,12 +14,12 @@ function ESM_PINO.SphericalConv(resolution::Int, hidden_channels::Int;
     end
     S = SpectralTransform(spectral_grid, Grid=Grid, nlat_half=nlat_half, dealiasing=dealiasing, nlayers=nlayers)
     plan = ESM_PINOSpeedy(S, NF)
-    return ESM_PINO.SphericalConv(hidden_channels, resolution, plan, operator_type, Int[])
+    return ESM_PINO.SphericalConv(hidden_channels, resolution, plan, operator_type, Int[], gain)
 end
 
 function Lux.initialparameters(rng::AbstractRNG, layer::ESM_PINO.SphericalConv{ESM_PINOSpeedy})
     T_type = layer.plan.NF
-    init_std = T_type(sqrt(2 / layer.hidden_channels))
+    init_std = T_type(sqrt(layer.gain / layer.hidden_channels))
     # Determine weight shape based on operator type
     if layer.operator_type == :diagonal
         # Shape: (out_channels, in_channels, lat_modes, lon_modes)
@@ -59,7 +60,7 @@ end
 
 function (layer::ESM_PINO.SphericalConv{ESM_PINOSpeedy})(x::AbstractArray, ps::NamedTuple, st::NamedTuple) 
     x_t = layer.plan.NF.(x)
-    x_field = FullGaussianGrid(x_t, input_as=Matrix)
+    x_field = FullGaussianField(x_t, input_as=Matrix)
     x_tr = SpeedyTransforms.transform(x_field, layer.plan.spectral_transform)
     x_tr = Array(x_tr)
     # Apply operator based on type

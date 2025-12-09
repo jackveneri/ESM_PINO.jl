@@ -98,10 +98,12 @@ mse_loss_function_QG3(u, target, input) =
 
 # Geometrically weighted MSE losses
 function geometric_mse_loss_function_QG3(output::AbstractArray, target::AbstractArray, pars::QG3_Physics_Parameters)
+    @views begin
         w = pars.weights
         geom_cw_loss = sqrt.(sum(@.((output - target)^2 * w), dims=(1,2)) ./
                             sum(@.( target^2 * w), dims=(1,2)))
-        return sum(geom_cw_loss) / length(geom_cw_loss)
+        return sum(geom_cw_loss) / length(geom_cw_loss)   
+    end      
 end
 function geometric_mse_loss_function_QG3(u, target, input, pars::QG3_Physics_Parameters)
     @views begin
@@ -111,6 +113,53 @@ function geometric_mse_loss_function_QG3(u, target, input, pars::QG3_Physics_Par
                             sum(@.( target^2 * w), dims=(1,2)))
         return sum(geom_cw_loss) / length(geom_cw_loss)    
     end
+end
+function angular_power_spectrum_batch_gpu(A::AbstractArray{T,4}, p::QG3ModelParameters{T}, k_indices) where T
+    # A is (n_dim1, n_lat, n_lon, n_batch)
+    n_dim1, L, _, n_batch = size(A)
+    
+    # Map over k_indices to compute power spectrum for each
+    ps_arrays = map(k_indices) do k_idx
+        l = k_idx - 1
+        fac = T(1 / (2 * l + 1))
+        
+        # Sum over all m values
+        ps = mapreduce(+, -l:l) do m
+            il = l + 1 - abs(m)
+            im = m < 0 ? 2*abs(m) : 2*m + 1
+            A[:, il, im, :] .^ 2
+        end
+        
+        fac .* ps  # Shape: (n_dim1, n_batch)
+    end
+    
+    # Stack into 3D array and reshape
+    # Each element in ps_arrays is (n_dim1, n_batch)
+    stacked = cat([reshape(ps, n_dim1, n_batch, 1) for ps in ps_arrays]..., dims=3)
+    
+    # Permute to (n_k, n_dim1, n_batch) and reshape to (n_k, n_samples)
+    stacked = permutedims(stacked, (3, 1, 2))
+    return reshape(stacked, length(k_indices), n_dim1 * n_batch)
+end
+
+function spectral_loss_function_QG3(u, target, input, pars::QG3_Physics_Parameters; k_min::Int=1, k_max::Int=500)
+    @assert k_min < k_max "k_min must be smaller than k_max"
+    u_pred = u(input)
+    u_pred_sh = QG3.transform_SH(permutedims(u_pred, (3, 1, 2, 4)), pars.ggsh)
+    target_sh = QG3.transform_SH(permutedims(target, (3, 1, 2, 4)), pars.ggsh)
+    
+    if k_max > size(u_pred_sh,2)
+        k_indices = 1:k_min
+    else
+        k_indices = vcat(1:k_min, k_max:size(u_pred_sh, 2))
+    end
+    
+    # Compute on GPU
+    u_pred_ps = angular_power_spectrum_batch_gpu(u_pred_sh, pars.qg3p.p, k_indices)
+    target_ps = angular_power_spectrum_batch_gpu(target_sh, pars.qg3p.p, k_indices)
+    
+    spectral_loss = sqrt.(sum((u_pred_ps .- target_ps).^2, dims=1))
+    return sum(spectral_loss) / length(spectral_loss)
 end
 
 # Physics-informed residual loss
@@ -150,8 +199,10 @@ Returns a callable `(model, ps, st, (input, target)) -> (loss, st, metrics)`.
 """
 function make_QG3_loss(pars::QG3_Physics_Parameters;
                        α::Float32=0.5f0,
-                       use_physics::Bool=true,
-                       geometric::Bool=true)
+                       β::Float32=0.3f0,
+                       use_physics::Bool=false,
+                       geometric::Bool=true,
+                       spectral::Bool=false)
 
     # choose data loss variant
     data_loss_fun = geometric ?
@@ -162,7 +213,9 @@ function make_QG3_loss(pars::QG3_Physics_Parameters;
     physics_loss_fun = use_physics ?
         ((u, x) -> physics_informed_loss_QG3(u, x, pars)) :
         ((u, x) -> 0f0)
-
+    spectral_loss_fun = spectral ?
+        ((u,y,x) -> spectral_loss_function_QG3(u,y,x,pars)) :
+        ((u,y,x) -> 0f0) 
     # build Lux-compatible loss function
     function QG3_loss_function(model::Lux.AbstractLuxLayer,
                                ps::NamedTuple,
@@ -171,12 +224,13 @@ function make_QG3_loss(pars::QG3_Physics_Parameters;
         u_net = Lux.StatefulLuxLayer{true}(model, ps, st)
 
         data_loss = data_loss_fun(u_net, target, input)
+        spectral_loss = spectral_loss_fun(u_net, target, input)
         physics_loss = physics_loss_fun(u_net, input)
-        total_loss = α * data_loss + (1 - α) * physics_loss
+        total_loss = α * data_loss + β * spectral_loss + (1 - α - β) * physics_loss
 
         return (total_loss,
                 (st),
-                (; data_loss, physics_loss))
+                (; data_loss, physics_loss, spectral_loss))
     end
 
     return QG3_loss_function
@@ -201,41 +255,53 @@ and accumulates the loss defined by `QG3_loss`.
 # Returns
 - A loss function `(model, ps, st, (u_t1, targets)) -> (loss, st, details)`
 """
-function make_autoregressive_loss(QG3_loss::Function; steps::Int, sequential::Bool=false)
+function make_autoregressive_loss(QG3_loss::Function; steps::Int=2)
     function autoregressive_loss(model::Lux.AbstractLuxLayer, ps::NamedTuple, st::NamedTuple,
                                  (u_t1, targets)::Tuple{AbstractArray, AbstractArray})
         u_net = Lux.StatefulLuxLayer{true}(model, ps, st)
-        total_loss = 0f0
-        current_input = u_t1
-
-        if sequential
-            # Sequential rollout (standard)
-            for step in 1:steps
-                current_output = u_net(current_input)
-                step_loss, _, _ = QG3_loss(model, ps, st, (current_input, targets[:,:,:,step,:]))
-                total_loss += step_loss
-                current_input = current_output
-            end
-        total_loss /= steps
-        else
-            preds = (u_t1,) #rewrite for case where you have different in_channels and out_channels
-            for step in 2:steps
-                next_pred = u_net(preds[end])
-                preds = (preds..., next_pred) 
-            end
-            
-            preds_stack = permutedims(cat(preds..., dims=5),(1,2,3,5,4))
-            
+       
+        preds = (u_t1,) #rewrite for case where you have different in_channels and out_channels
+        for step in 2:steps
+            next_pred = u_net(preds[end])
+            preds = (preds..., next_pred) 
+        end
+        preds_stack = permutedims(cat(preds..., dims=5),(1,2,3,5,4))
+        @views begin
             # target and preds_stack should have shape (Nx, Ny, Nz, steps, Nb)
             step_losses = map(step -> begin
-                l, _, _ = QG3_loss(model, ps, st, (preds_stack[:,:,:,step,:], targets[:,:,:,step,:]))
-                l
+            l, _, s = QG3_loss(model, ps, st, (preds_stack[:,:,:,step,:], targets[:,:,:,step,:]))
+            l, s.data_loss, s.physics_loss, s.spectral_loss
             end, 1:steps)
-            total_loss = mean(step_losses)
+            total_losses, data_losses, physics_losses, spectral_losses  = [collect(x) for x in zip(step_losses...)] 
+            total_loss= mean(total_losses)
+            physics_loss = mean(physics_losses)
+            data_loss = mean(data_losses)
+            spectral_loss = mean(spectral_losses)
+            return (total_loss, (st), (; data_loss, physics_loss, spectral_loss))
         end
-
-        return (total_loss, (st), (; total_loss))
     end
     return autoregressive_loss
+end
+
+function autoregressive_loss(trained_u, x_batch::AbstractArray, target_batch::AbstractArray, pars::QG3_Physics_Parameters; n_steps::Int=2, geometric::Bool=true)
+    preds = (x_batch,) #rewrite for case where you have different in_channels and out_channels
+    for step in 2:n_steps
+        next_pred = trained_u(preds[end])
+        preds = (preds..., next_pred) 
+    end
+    preds_stack = permutedims(cat(preds..., dims=5),(1,2,3,5,4))
+    if geometric
+        QG3_loss = (u,y,x) -> geometric_mse_loss_function_QG3(u, y, x, pars)
+    else
+        QG3_loss = mse_loss_function_QG3
+    end
+    @views begin
+        # target and preds_stack should have shape (Nx, Ny, Nz, steps, Nb)
+        step_losses = map(step -> begin
+            QG3_loss(trained_u, target_batch[:,:,:,step,:], preds_stack[:,:,:,step,:])
+        end, 1:n_steps)
+        return mean(step_losses)
+    end
+    
 end
 

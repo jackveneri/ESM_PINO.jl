@@ -109,8 +109,8 @@ function Lux.initialstates(rng::AbstractRNG, layer::GaussianGridEmbedding2D)
 end
 
 function Base.show(io::IO, layer::GaussianGridEmbedding2D)
-    lat_range = "($(layer.normalize_lat[1])..$(layer.normalize_lat[2]))"
-    lon_range = "($(layer.normalize_lon[1])..$(layer.normalize_lon[2]))"
+    lat_range = "($(layer.normalize_lat[1]):$(layer.normalize_lat[2]))"
+    lon_range = "($(layer.normalize_lon[1]):$(layer.normalize_lon[2]))"
     
     print(io, "GaussianGridEmbedding2D(lat: $lat_range, lon: $lon_range)")
 end
@@ -159,7 +159,7 @@ ChainRulesCore.@non_differentiable (layer::GaussianGridEmbedding2D)(::Any)
 $(TYPEDSIGNATURES)
 Empty layer to test extension documentation.
 """
-struct SphericalKernel{T} <: Lux.AbstractLuxLayer
+struct SphericalKernel{T} <: Lux.AbstractLuxContainerLayer{(:spatial_conv,:spherical_conv,:norm)}
     spatial_conv::Union{Lux.Conv, Lux.NoOpLayer}
     spherical_conv::SphericalConv{T}
     norm::Union{Lux.InstanceNorm, Lux.NoOpLayer}  
@@ -181,7 +181,7 @@ Lux.apply(layer::SphericalKernel{T}, ps, st, x) where T =
 $(TYPEDSIGNATURES)
 Empty layer to test extension documentation.
 """
-struct SFNO_Block{T} <: Lux.AbstractLuxLayer
+struct SFNO_Block{T} <: Lux.AbstractLuxContainerLayer{(:spherical_kernel,:channel_mlp)}
     spherical_kernel :: SphericalKernel{T}
     channel_mlp :: ChannelMLP
     channels :: Int

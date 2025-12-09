@@ -223,7 +223,7 @@ Expects input in (height, width, channels, batch) format.
 - Adds gated skip connection to stabilize training
 - Functions similarly to a feed-forward block in transformers
 """
-struct ChannelMLP{M,S} <: Lux.AbstractLuxLayer
+struct ChannelMLP{M,S} <: Lux.AbstractLuxContainerLayer{(:mlp, :skip)}
     mlp::M
     skip::S
     expansion_factor::Number
@@ -233,7 +233,7 @@ function ChannelMLP(channels::Int; expansion_factor=2.0, activation=NNlib.gelu, 
     hidden_ch = Int(expansion_factor * channels)
     mlp = Chain(
         Conv((1, 1), channels => hidden_ch, activation, cross_correlation=true, init_weight=kaiming_normal, init_bias=zeros32),
-        Conv((1, 1), hidden_ch => channels, identity, cross_correlation=true, init_weight=kaiming_normal, use_bias=bias, init_bias=zeros32)
+        Conv((1, 1), hidden_ch => channels, identity, cross_correlation=true, init_weight=kaiming_normal(gain=1), use_bias=bias, init_bias=zeros32)
     )
     if soft_gating
         skip = SoftGating(channels)
@@ -265,26 +265,6 @@ function (layer::ChannelMLP)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
         return y_mlp, (mlp=st_mlp, skip=st_skip)
     end
 end
-
-function Base.show(io::IO, layer::ChannelMLP)
-    input_channels = layer.mlp.layers[1].in_chs  
-    output_channels = layer.mlp.layers[2].out_chs 
-    hidden_channels = Int(layer.expansion_factor * input_channels)
-    
-    parts = String[]
-    push!(parts, "ChannelMLP($input_channels => $hidden_channels => $output_channels")
-    
-    if layer.skip != Lux.NoOpLayer()
-        push!(parts, "+soft_gating")
-    end
-    
-    if !Bool(layer.mlp.layers[2].use_bias)
-        push!(parts, "no_bias")
-    end
-    
-    print(io, join(parts, ", ") * ")")
-end
-
 """
     meshgrid(x, y)
 
@@ -346,11 +326,11 @@ ChainRulesCore.@non_differentiable (layer::GridEmbedding2D)(::Any)
 
 function Base.show(io::IO, layer::GridEmbedding2D)
     x_range = length(layer.boundaries_x) == 2 ? 
-        "($(layer.boundaries_x[1])..$(layer.boundaries_x[2]))" :
+        "($(layer.boundaries_x[1]):$(layer.boundaries_x[2]))" :
         "[$(join(layer.boundaries_x, ", "))]"
     
     y_range = length(layer.boundaries_y) == 2 ? 
-        "($(layer.boundaries_y[1])..$(layer.boundaries_y[2]))" :
+        "($(layer.boundaries_y[1]):$(layer.boundaries_y[2]))" :
         "[$(join(layer.boundaries_y, ", "))]"
     
     print(io, "GridEmbedding2D(x: $x_range, y: $y_range)")

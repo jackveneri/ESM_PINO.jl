@@ -32,7 +32,8 @@ ŷ = new_model(x, ps, st)
 function transfer_SFNO_model(model::ESM_PINO.SFNO, qg3ppars::QG3ModelParameters; 
     batch_size::Int=typeof(model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh).parameters[end] ? 
     model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[4] : 
-    model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.sz[4]
+    model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.sz[4], 
+    gpu::Union{Nothing, Bool}=nothing
 )
     projection_layers = model.projection.layers
     last_layer_index = length(projection_layers)  # or fieldcount(typeof(projection_layers))
@@ -49,7 +50,9 @@ function transfer_SFNO_model(model::ESM_PINO.SFNO, qg3ppars::QG3ModelParameters;
         channel_mlp_expansion=model.sfno_blocks.layers.layer_1.channel_mlp.expansion_factor,
         activation = model.sfno_blocks.layers.layer_1.activation,
         positional_embedding = model.embedding == NoOpLayer() ? "no_grid" : "grid",
-        gpu = Base.unwrap_unionall(typeof(model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh)).parameters[end],
+        gpu = isnothing(gpu) ?
+            Base.unwrap_unionall(typeof(model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh)).parameters[end]
+        : gpu ,
         operator_type = model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.operator_type,
         inner_skip = model.sfno_blocks.layers.layer_1.skip,
         outer_skip = model.outer_skip,
@@ -406,10 +409,11 @@ function train_model(
     lr_0::Float64=2e-3,
     gpu::Bool=true, 
     parameters::QG3_Physics_Parameters=QG3_Physics_Parameters(pars, batch_size=batchsize, gpu=gpu),
-    use_physics=true, 
-    geometric=true,
-    α=0.7f0,
-    nfuture::Int=0,  # Added to match Python version
+    use_physics::Bool=false, 
+    geometric::Bool=true,
+    spectral::Bool=false,
+    α=0.5f0,
+    β=0.3f0,
     logging::Bool=true,
 )
     
@@ -421,6 +425,7 @@ function train_model(
     n_val_total = size(x_val, 4)
     
     # Validate parameters
+    @assert α + β < 1 && α > 0 && β > 0 "Parameters α and β must be positive and their sum <1 (as physics informed loss is computed as 1 - their sum)"
     @assert num_examples <= n_train_total "num_examples ($num_examples) cannot exceed training set size ($n_train_total)"
     @assert num_valid <= n_val_total "num_valid ($num_valid) cannot exceed validation set size ($n_val_total)"
     @assert num_examples % batchsize == 0 "num_examples ($num_examples) must be a multiple of batchsize ($batchsize)"
@@ -501,12 +506,13 @@ function train_model(
     end
     
     # Create loss function
-    QG3_loss = make_QG3_loss(par_train; geometric=geometric, use_physics=use_physics, α=α)
+    QG3_loss = make_QG3_loss(par_train; geometric=geometric, use_physics=use_physics, spectral=spectral, α=α, β=β)
     
     # Setup online statistics trackers for running averages
     total_loss_tracker = Lag(Float32, 32)
     physics_loss_tracker = Lag(Float32, 32)
     data_loss_tracker = Lag(Float32, 32)
+    spectral_loss_tracker = Lag(Float32, 32)
     
     # Global iteration counter
     total_iters = 0
@@ -529,6 +535,7 @@ function train_model(
         accumulated_loss = 0.0
         accumulated_physics_loss = 0.0
         accumulated_data_loss = 0.0
+        accumulated_spectral_loss = 0.0
         n_train_samples = 0
         
         for (x_batch, target_batch) in train_dataloader
@@ -544,12 +551,14 @@ function train_model(
             fit!(total_loss_tracker, Float32(loss))
             fit!(physics_loss_tracker, Float32(stats.physics_loss))
             fit!(data_loss_tracker, Float32(stats.data_loss))
+            fit!(spectral_loss_tracker, Float32(stats.spectral_loss))
             
             # Accumulate losses (weighted by batch size)
             batch_size_actual = size(x_batch, 4)  # Assuming batch is last dimension
             accumulated_loss += loss * batch_size_actual
             accumulated_physics_loss += stats.physics_loss * batch_size_actual
             accumulated_data_loss += stats.data_loss * batch_size_actual
+            accumulated_spectral_loss += stats.spectral_loss * batch_size_actual
             n_train_samples += batch_size_actual
             
             # Check for NaN
@@ -562,11 +571,13 @@ function train_model(
         train_loss = accumulated_loss / n_train_samples
         train_physics_loss = accumulated_physics_loss / n_train_samples
         train_data_loss = accumulated_data_loss / n_train_samples
+        train_spectral_loss = accumulated_spectral_loss / n_train_samples
         
         # Running averages from online stats
         mean_total_loss = mean(OnlineStats.value(total_loss_tracker))
         mean_physics_loss = mean(OnlineStats.value(physics_loss_tracker))
         mean_data_loss = mean(OnlineStats.value(data_loss_tracker))
+        mean_spectral_loss = mean(OnlineStats.value(spectral_loss_tracker))
         
         # ===== VALIDATION PHASE =====
         valid_loss = 0.0
@@ -578,11 +589,6 @@ function train_model(
             # You may need to implement a separate validation function
             # For now, computing loss without updating weights
             model_output = trained_u(x_batch)
-            
-            # Apply multi-step rollout if needed
-            for _ in 1:nfuture
-                model_output = trained_u(model_output)
-            end
             
             # Compute loss (this should match your loss function structure)
             if geometric 
@@ -608,8 +614,9 @@ function train_model(
             @printf "Training Loss:     %.9f (running avg: %.9f)\n" train_loss mean_total_loss
             @printf "  Physics Loss:    %.9f (running avg: %.9f)\n" train_physics_loss mean_physics_loss
             @printf "  Data Loss:       %.9f (running avg: %.9f)\n" train_data_loss mean_data_loss
+            @printf "  Spectral Loss:   %.9f (running avg: %.9f)\n" train_spectral_loss mean_spectral_loss
             println("-"^80)
-            @printf "Validation Loss(Computed as Data Loss only):   %.9f\n" valid_loss
+            @printf "Validation Loss (Computed as Data Loss only):   %.9f\n" valid_loss
         end
         
         GC.gc()  # Garbage collection after each epoch
@@ -668,37 +675,76 @@ pred = ft_model(x_val)
 """
 function fine_tuning(x::AbstractArray, 
     target::AbstractArray, 
+    x_val::AbstractArray,
+    target_val::AbstractArray,
     model,
     ps::NamedTuple,
     st::NamedTuple;
+    seed::Int=0,
     n_steps::Int=2,
-    maxiters::Int=5, 
+    nepochs::Int=5,
+    num_examples::Int=256,  # Number of training samples per epoch
+    num_valid::Int=8,       # Number of validation samples per epoch 
     lr_0::Float64=1e-5,
     gpu::Bool=true, 
     parameters::QG3_Physics_Parameters=QG3_Physics_Parameters(gpu=gpu),
-    use_physics=true,
-    geometric=true, 
-    α=0.7f0
+    use_physics=false,
+    geometric=true,
+    spectral=false, 
+    α=0.5f0,
+    β=0.3f0,
+    logging::Bool=true
     )
     batchsize = #retrieve from model
     typeof(model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh).parameters[end] ? 
     model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[4] : 
-    model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.sz[4]    
+    model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.sz[4]  
+    train_start = time()
+    rng = Random.default_rng(seed)
+    
+    # Get total dataset sizes
+    n_train_total = size(x, 4)
+    n_val_total = size(x_val, 4)
+    
+    # Validate parameters
+    @assert α + β < 1 && α > 0 && β > 0 "Parameters α and β must be positive and their sum <1 (as physics informed loss is computed as 1 - their sum)"
+    @assert num_examples <= n_train_total "num_examples ($num_examples) cannot exceed training set size ($n_train_total)"
+    @assert num_valid <= n_val_total "num_valid ($num_valid) cannot exceed validation set size ($n_val_total)"
+    @assert num_examples % batchsize == 0 "num_examples ($num_examples) must be a multiple of batchsize ($batchsize)"
+    @assert num_valid % batchsize == 0 "num_valid ($num_valid) must be a multiple of batchsize ($batchsize)"  
     @assert length(size(target)) == 5 "Target data must have 5 dimensions (lat, lon, channel, batch, time)"
+    @assert length(size(target_val)) == 5 "Target validation data must have 5 dimensions (lat, lon, channel, batch, time)"
     target = permutedims(target, (1,2,3,5,4)) # make sure target is (lat, lon, channel, time, batch)
+    target_val = permutedims(target_val, (1,2,3,5,4)) # make sure target is (lat, lon, channel, time, batch)
     @assert size(target, 4) == n_steps "Target data must be pre-computed to have the same 5th dimension size as the number of autoregressive steps computed in the loss"
+    @assert size(target_val, 4) == n_steps "Target validation data must be pre-computed to have the same 5th dimension size as the number of autoregressive steps computed in the loss"
     if gpu
-        dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> gpu_device()
-
-        ps = ps |> gpu_device()
-        st = st |> gpu_device()
+        device_fn = gpu_device()
+        ps, st = device_fn(ps), device_fn(st)
     else
-        dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> cpu_device()
-        ps = ps |> cpu_device()
-        st = st |> cpu_device()
+        device_fn = cpu_device()
+        ps, st = device_fn(ps), device_fn(st)
         QG3.gpuoff()
     end
     # Rest of training setup remains similar
+    # ===== SETUP FIXED VALIDATION SET =====
+    # Sample validation set once and keep it fixed across all epochs
+    val_indices = randperm(rng, n_val_total)[1:num_valid]
+    x_val_fixed = x_val[:, :, :, val_indices]
+    target_val_fixed = target_val[:, :, :, :, val_indices]
+    
+    # Create validation dataloader once (will be reused each epoch)
+    val_dataloader = DataLoader((x_val_fixed, target_val_fixed); 
+                               batchsize=batchsize, shuffle=false) |> device_fn
+    
+    if logging
+        println("Fine Tuning setup:")
+        println("  - Training samples per epoch: $num_examples")
+        println("  - Validation samples (fixed): $num_valid")
+        println("  - Batch size: $batchsize")
+        println("  - Training batches per epoch: $(num_examples ÷ batchsize)")
+        println("  - Validation batches per epoch: $(num_valid ÷ batchsize)")
+    end
     
     opt = Optimisers.ADAM(lr_0)
     train_state = Training.TrainState(model, ps, st, opt)
@@ -718,37 +764,107 @@ function fine_tuning(x::AbstractArray,
         par_train = nothing
     end
     
-    QG3_loss = make_QG3_loss(par_train, geometric=geometric, use_physics=use_physics, α=α)
-    AR_loss = make_autoregressive_loss(QG3_loss; steps=n_steps, sequential=false)
-    total_loss_tracker = ntuple(_ -> Lag(Float32, 32), 1)[1]
+    QG3_loss = make_QG3_loss(par_train, geometric=geometric, use_physics=use_physics, spectral=spectral, α=α, β=β)
+    AR_loss = make_autoregressive_loss(QG3_loss; steps=n_steps)
+    total_loss_tracker = Lag(Float32, 32)
+    physics_loss_tracker = Lag(Float32, 32)
+    data_loss_tracker = Lag(Float32, 32)
+    spectral_loss_tracker = Lag(Float32, 32)
 
-    iter = 1
-    for (x, target_data) in Iterators.cycle(dataloader)
-        _, loss, stats, train_state = Training.single_train_step!(AutoZygote(), AR_loss, (x, target_data), train_state)
+    total_iters = 0
+     for epoch in 1:nepochs
+        epoch_start = time()
         
-        fit!(total_loss_tracker, Float32(loss))
-        #fit!(physics_loss_tracker, Float32(stats.physics_loss))
-        #fit!(data_loss_tracker, Float32(stats.data_loss))
-
-        mean_loss = mean(OnlineStats.value(total_loss_tracker))
-        #mean_physics_loss = mean(OnlineStats.value(physics_loss_tracker))
-        #mean_data_loss = mean(OnlineStats.value(data_loss_tracker))
-
-        isnan(loss) && throw(ArgumentError("NaN Loss Detected"))
+        # ===== SAMPLE RANDOM SUBSET FOR TRAINING THIS EPOCH =====
+        # Training: sample num_examples randomly each epoch
+        train_indices = randperm(rng, n_train_total)[1:num_examples]
+        x_train_epoch = x[:, :, :, train_indices]
+        target_train_epoch = target[:, :, :, :, train_indices]
         
-        if iter % 1 == 0 || iter == maxiters
-            #@printf "Iteration: [%5d / %5d] \t Loss: %.9f (%.9f) \t Physics Loss: %.9f \
-            #     (%.9f) \t Data Loss: %.9f (%.9f)\n" iter maxiters loss mean_loss stats.physics_loss mean_physics_loss stats.data_loss mean_data_loss
-            @printf "Iteration: [%5d / %5d] \t Loss: %.9f (%.9f) \n" iter maxiters loss mean_loss
-                        
-            GC.gc()
+        # Create training dataloader for this epoch
+        train_dataloader = DataLoader((x_train_epoch, target_train_epoch); 
+                                     batchsize=batchsize, shuffle=true) |> device_fn
+        
+        # ===== TRAINING PHASE =====
+        accumulated_loss = 0.0
+        accumulated_physics_loss = 0.0
+        accumulated_data_loss = 0.0
+        accumulated_spectral_loss = 0.0
+        n_train_samples = 0
+        
+        for (x_batch, target_batch) in train_dataloader
+            # Forward pass with potential multi-step rollout
+            _, loss, stats, train_state = Training.single_train_step!(
+                AutoZygote(), 
+                AR_loss, 
+                (x_batch, target_batch), 
+                train_state
+            )
+            
+            # Update online statistics trackers
+            fit!(total_loss_tracker, Float32(loss))
+            fit!(physics_loss_tracker, Float32(stats.physics_loss))
+            fit!(data_loss_tracker, Float32(stats.data_loss))
+            fit!(spectral_loss_tracker, Float32(stats.spectral_loss))
+            
+            # Accumulate losses (weighted by batch size)
+            batch_size_actual = size(x_batch, 4)  # Assuming batch is last dimension
+            accumulated_loss += loss * batch_size_actual
+            accumulated_physics_loss += stats.physics_loss * batch_size_actual
+            accumulated_data_loss += stats.data_loss * batch_size_actual
+            accumulated_spectral_loss += stats.spectral_loss * batch_size_actual
+            n_train_samples += batch_size_actual
+            
+            # Check for NaN
+            isnan(loss) && throw(ArgumentError("NaN Loss Detected at epoch $epoch, iteration $total_iters"))
+            
+            total_iters += 1
         end
         
-        iter += 1
+        # Average training losses for this epoch
+        train_loss = accumulated_loss / n_train_samples
+        train_physics_loss = accumulated_physics_loss / n_train_samples
+        train_data_loss = accumulated_data_loss / n_train_samples
+        train_spectral_loss = accumulated_spectral_loss / n_train_samples
         
-        if iter > maxiters
-            break
+        # Running averages from online stats
+        mean_total_loss = mean(OnlineStats.value(total_loss_tracker))
+        mean_physics_loss = mean(OnlineStats.value(physics_loss_tracker))
+        mean_data_loss = mean(OnlineStats.value(data_loss_tracker))
+        mean_spectral_loss = mean(OnlineStats.value(spectral_loss_tracker))
+        
+        # ===== VALIDATION PHASE =====
+        valid_loss = 0.0
+        n_valid_samples = 0
+        trained_u = Lux.testmode(StatefulLuxLayer{true}(model, train_state.parameters, train_state.states))
+        # Validation loop (no gradient computation)
+        for (x_batch, target_batch) in val_dataloader
+            # Compute loss (this should match your loss function structure)
+            loss_val = autoregressive_loss(trained_u, x_batch, target_batch, par_train, n_steps=n_steps, geometric=geometric)
+            batch_size_actual = size(x_batch, 4)
+            valid_loss += loss_val * batch_size_actual
+            n_valid_samples += batch_size_actual
         end
+        
+        # Average validation losses
+        valid_loss = valid_loss / n_valid_samples
+        
+        epoch_time = time() - epoch_start
+        
+        # ===== LOGGING =====
+        if logging
+            println("="^80)
+            @printf "Epoch: [%3d / %3d] \t Time: %.2f s\n" epoch nepochs epoch_time
+            println("-"^80)
+            @printf "Training Loss:     %.9f (running avg: %.9f)\n" train_loss mean_total_loss
+            @printf "  Physics Loss:    %.9f (running avg: %.9f)\n" train_physics_loss mean_physics_loss
+            @printf "  Data Loss:       %.9f (running avg: %.9f)\n" train_data_loss mean_data_loss
+            @printf "  Spectral Loss:   %.9f (running avg: %.9f)\n" train_spectral_loss mean_spectral_loss
+            println("-"^80)
+            @printf "Validation Loss(Computed as Data Loss only):   %.9f\n" valid_loss
+        end
+        
+        GC.gc()  # Garbage collection after each epoch
     end
     QG3.gpuon()
     return StatefulLuxLayer{true}(model, train_state.parameters, train_state.states)
@@ -784,13 +900,14 @@ seq_data = stack_time_steps(data, 4)
 @assert size(seq_data) == (64, 128, 3, 4, 7)
 ```
 """
-function stack_time_steps(data::AbstractArray{T,4}, time_steps::Int; dt::Int=1, N_sims::Int=size(data,4)-(time_steps -1)*dt) where T
+function stack_time_steps(data::AbstractArray{T,4}, time_steps::Int; dt::Int=1, N_sims::Int=size(data,4)-(time_steps -1)*dt, gpu::Bool=false) where T
     lat, lon, channels, batch_size = size(data)
     max_n_sequences = batch_size - (time_steps -1)*dt
     n_sequences = min(N_sims, max_n_sequences)
     if n_sequences < N_sims
         println("Warning: Requested number of sequences $(N_sims) exceeds maximum possible $(max_n_sequences). Using $(n_sequences) instead.")
     end
+    data = Array(data)
     # Create 5D array using comprehension
     result = cat(
         [data[:, :, :, i:dt:i+dt*(time_steps-1)] for i in 1:n_sequences]...,
@@ -798,33 +915,45 @@ function stack_time_steps(data::AbstractArray{T,4}, time_steps::Int; dt::Int=1, 
     )
     
     # Permute dimensions to get the desired shape
-    return permutedims(result, (1, 2, 3, 5, 4))
+    result = permutedims(result, (1, 2, 3, 5, 4))
+    if gpu
+        result = QG3.togpu(result)
+    end
+    return result
 end
 
-function load_precomputed_data(; N_sims::Int=1000, root=dirname(@__DIR__), res="t42")
+function load_precomputed_data(; N_sims::Int=1000, root=dirname(@__DIR__), res="t42", gpu::Bool=false)
     if !isdir(string(root, "/data/"))
         error("Data directory not found at $(string(root, "/data/")). Please ensure precomputed data is available.")
     end
     if res != "t21" && res != "t42"
         error("Resolution $(res) not recognized. Supported resolutions are 't21' and 't42'.")
     end
+    QG3.gpuoff()
     @load string(root, "/data/", res, "-precomputed-p.jld2") qg3ppars
-    qg3ppars = qg3ppars
-    qg3p = CUDA.@allowscalar QG3Model(qg3ppars)
-    @load string(root, "/data/",res, "-precomputed-S.jld2") S
+    qg3p = QG3Model(qg3ppars)
+    @load string(root, "/data/", res , "-precomputed-S.jld2") S
     if res == "t42"
         S = CUDA.@allowscalar QG3.reorder_SH_gpu(S, qg3ppars)
     else
         S = QG3.togpu(S)
     end 
-    # initial conditions for streamfunction and vorticity
+    
     @load string(root,"/data/", res, "_qg3_data_SH_CPU.jld2") q
     q = QG3.reorder_SH_gpu(q[:,:,:,1:N_sims], qg3ppars)
     ψ = QG3.qprimetoψ(qg3p, q)
     solψ = permutedims(QG3.transform_grid_data(ψ, qg3p),(2,3,1,4))
     solu = permutedims(QG3.transform_grid_data(q, qg3p),(2,3,1,4))
+    if gpu
+        QG3.gpuon()
+        S = @CUDA.allowscalar QG3.reorder_SH_gpu(S, qg3ppars) 
+        solψ_gpu = CuArray(solψ) 
+        solu_gpu = CuArray(solu)
+        return qg3ppars, qg3p, S, solψ_gpu, solu_gpu
+    else
+        return qg3ppars, qg3p, S, solψ, solu
+    end
     
-    return qg3ppars, qg3p, S, solψ, solu
 end
 """
     preprocess_data(;
