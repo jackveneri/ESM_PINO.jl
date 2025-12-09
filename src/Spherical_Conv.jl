@@ -21,6 +21,7 @@ struct SphericalConv{T} <: AbstractSphericalConv
     plan :: T
     operator_type::Symbol
     gpu_cols::Vector{Int}
+    gain::Real 
 end
 # Default behavior: throw or warn if used without an extension
 Lux.initialparameters(rng::AbstractRNG, layer::SphericalConv{T}) where T =

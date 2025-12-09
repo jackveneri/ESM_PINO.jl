@@ -105,67 +105,56 @@ data_norm, μ, σ = normalize_data(data, dims=(1, 2, 4))  # Over lat, lon, batch
 function normalize_data(data::AbstractArray; channelwise::Bool=false, dims::Union{Nothing, Int, Tuple}=nothing)
     
     if channelwise
-        # Try to detect if data is in (lat, lon, channel, batch) format
         ndims_data = ndims(data)
         
         if ndims_data == 4
-            # Assume format: (lat, lon, channel, batch)
-            n_channels = size(data, 3)
+            # Format: (lat, lon, channel, batch)
+            # Compute statistics over dims (1, 2, 4) for each channel
+            μ = mean(data, dims=(1, 2, 4))  # Shape: (1, 1, n_channels, 1)
+            σ = std(data, dims=(1, 2, 4))   # Shape: (1, 1, n_channels, 1)
             
-            # Compute mean and std for each channel across spatial and batch dimensions
-            μ = zeros(eltype(data), n_channels)
-            σ = zeros(eltype(data), n_channels)
+            # Avoid division by zero - use broadcasting-safe replacement
+            σ_safe = ifelse.(σ .< eps(eltype(data)), one(eltype(data)), σ)
             
-            normalized_data = similar(data)
-            
-            for c in 1:n_channels
-                # Extract channel c across all spatial locations and batches
-                channel_data = selectdim(data, 3, c)
-                
-                # Compute statistics over spatial (lat, lon) and batch dimensions
-                μ[c] = mean(channel_data)
-                σ[c] = std(channel_data)
-                
-                # Avoid division by zero
-                if σ[c] < eps(eltype(data))
-                    @warn "Channel $c has near-zero std ($(σ[c])). Setting std to 1.0 to avoid division by zero."
-                    σ[c] = one(eltype(data))
-                end
-                
-                # Normalize this channel
-                normalized_channel = (channel_data .- μ[c]) ./ σ[c]
-                selectdim(normalized_data, 3, c) .= normalized_channel
+            # Check for near-zero std and warn (on CPU)
+            if any(Array(σ) .< eps(eltype(data)))
+                n_channels = size(data, 3)
+                @warn "Some channels have near-zero std. Setting those to 1.0 to avoid division by zero."
             end
             
-            return normalized_data, μ, σ
+            # Normalize using broadcasting (GPU-friendly)
+            normalized_data = (data .- μ) ./ σ_safe
+            
+            # Squeeze dimensions for return values
+            μ_squeezed = dropdims(μ, dims=(1, 2, 4))
+            σ_squeezed = dropdims(σ_safe, dims=(1, 2, 4))
+            
+            return normalized_data, μ_squeezed, σ_squeezed
             
         elseif ndims_data == 3
-            # Could be (lat, lon, channel) or (channel, height, width)
-            # Try to guess: if last dimension is smallest, it's likely channels
+            # Try to determine format
             sizes = size(data)
             if sizes[3] < minimum(sizes[1:2])
                 # Assume (lat, lon, channel) format
-                n_channels = sizes[3]
+                # Compute statistics over dims (1, 2) for each channel
+                μ = mean(data, dims=(1, 2))  # Shape: (1, 1, n_channels)
+                σ = std(data, dims=(1, 2))   # Shape: (1, 1, n_channels)
                 
-                μ = zeros(eltype(data), n_channels)
-                σ = zeros(eltype(data), n_channels)
-                normalized_data = similar(data)
+                # Avoid division by zero
+                σ_safe = ifelse.(σ .< eps(eltype(data)), one(eltype(data)), σ)
                 
-                for c in 1:n_channels
-                    channel_data = selectdim(data, 3, c)
-                    μ[c] = mean(channel_data)
-                    σ[c] = std(channel_data)
-                    
-                    if σ[c] < eps(eltype(data))
-                        @warn "Channel $c has near-zero std ($(σ[c])). Setting std to 1.0."
-                        σ[c] = one(eltype(data))
-                    end
-                    
-                    normalized_channel = (channel_data .- μ[c]) ./ σ[c]
-                    selectdim(normalized_data, 3, c) .= normalized_channel
+                if any(Array(σ) .< eps(eltype(data)))
+                    @warn "Some channels have near-zero std. Setting those to 1.0."
                 end
                 
-                return normalized_data, μ, σ
+                # Normalize
+                normalized_data = (data .- μ) ./ σ_safe
+                
+                # Squeeze dimensions
+                μ_squeezed = dropdims(μ, dims=(1, 2))
+                σ_squeezed = dropdims(σ_safe, dims=(1, 2))
+                
+                return normalized_data, μ_squeezed, σ_squeezed
             else
                 @warn "3D data format unclear. Falling back to global normalization. Use dims argument for custom behavior."
                 channelwise = false
@@ -182,17 +171,19 @@ function normalize_data(data::AbstractArray; channelwise::Bool=false, dims::Unio
         μ = mean(data, dims=dims)
         σ = std(data, dims=dims)
         
-        # Avoid division by zero
-        σ = replace(x -> x < eps(eltype(data)) ? one(eltype(data)) : x, σ)
+        # Avoid division by zero using broadcasting
+        σ_safe = ifelse.(σ .< eps(eltype(data)), one(eltype(data)), σ)
         
-        return (data .- μ) ./ σ, μ, σ
+        return (data .- μ) ./ σ_safe, μ, σ_safe
     else
-        # Global statistics
+        # Global statistics (returns scalars)
         μ = mean(data)
         σ = std(data)
         
-        if σ < eps(eltype(data))
-            @warn "Data has near-zero std ($σ). Setting std to 1.0."
+        # Check on CPU if needed
+        σ_val = σ isa Number ? σ : Array(σ)[]
+        if σ_val < eps(eltype(data))
+            @warn "Data has near-zero std ($σ_val). Setting std to 1.0."
             σ = one(eltype(data))
         end
         
