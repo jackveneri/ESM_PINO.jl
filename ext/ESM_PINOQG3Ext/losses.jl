@@ -167,9 +167,8 @@ function physics_informed_loss_QG3(u, q_0, pars::QG3_Physics_Parameters)
     @views begin
         σ = pars.σ
         μ = pars.μ
-        channelwise = !(isa(σ, Real) && isa(μ, Real))
-        q_pred = ESM_PINO.denormalize_data(u(q_0), μ, σ, channelwise=channelwise)
-        q_0_denorm = ESM_PINO.denormalize_data(q_0, μ, σ, channelwise=channelwise)
+        q_pred = ESM_PINO.denormalize_data(u(q_0), μ, σ)
+        q_0_denorm = ESM_PINO.denormalize_data(q_0, μ, σ)
 
         ∂u_∂t = (q_pred .- q_0_denorm) ./ pars.dt
         ∂u_∂t = permutedims(∂u_∂t, (3, 1, 2, 4))

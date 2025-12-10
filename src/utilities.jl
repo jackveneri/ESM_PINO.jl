@@ -237,8 +237,8 @@ data_original = denormalize_data(data_norm, μ_vec, σ_vec, channelwise=true)
 """
 function denormalize_data(normalized_data::AbstractArray, μ, σ)
     channelwise = !(isa(σ, Real) && isa(μ, Real))
+    
     if channelwise
-        # μ and σ should be vectors
         if !(μ isa AbstractVector && σ isa AbstractVector)
             throw(ArgumentError("For channelwise denormalization, μ and σ must be vectors"))
         end
@@ -246,43 +246,33 @@ function denormalize_data(normalized_data::AbstractArray, μ, σ)
         ndims_data = ndims(normalized_data)
         
         if ndims_data == 4
-            # (lat, lon, channel, batch) format
             n_channels = size(normalized_data, 3)
             
             if length(μ) != n_channels || length(σ) != n_channels
                 throw(ArgumentError("μ and σ length ($(length(μ))) must match number of channels ($n_channels)"))
             end
             
-            # Create denormalized channels as a vector of arrays
-            denormalized_channels = [
-                selectdim(normalized_data, 3, c) .* σ[c] .+ μ[c]
-                for c in 1:n_channels
-            ]
+            μ_reshaped = reshape(μ, 1, 1, :, 1)
+            σ_reshaped = reshape(σ, 1, 1, :, 1)
             
-            # Stack along the channel dimension
-            return permutedims(cat(denormalized_channels...; dims=4),(1,2,4,3))
+            return normalized_data .* σ_reshaped .+ μ_reshaped
             
         elseif ndims_data == 3
-            # (lat, lon, channel) format
             n_channels = size(normalized_data, 3)
             
             if length(μ) != n_channels || length(σ) != n_channels
                 throw(ArgumentError("μ and σ length must match number of channels"))
             end
             
-            # Create denormalized channels as a vector of arrays
-            denormalized_channels = [
-                selectdim(normalized_data, 3, c) .* σ[c] .+ μ[c]
-                for c in 1:n_channels
-            ]
+            μ_reshaped = reshape(μ, 1, 1, :)
+            σ_reshaped = reshape(σ, 1, 1, :)
             
-            # Stack along the channel dimension
-            return cat(denormalized_channels...; dims=3)
+            return normalized_data .* σ_reshaped .+ μ_reshaped
+            
         else
             throw(ArgumentError("Channel-wise denormalization expects 3D or 4D data"))
         end
     else
-        # Global denormalization
         return normalized_data .* σ .+ μ
     end
 end

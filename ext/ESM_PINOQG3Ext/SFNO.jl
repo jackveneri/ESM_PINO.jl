@@ -1,67 +1,4 @@
 """
-Helper function to build encoder/decoder layers with variable depth.
-
-# Arguments
-- `in_channels::Int`: Number of input channels
-- `out_channels::Int`: Number of output channels  
-- `hidden_channels::Int`: Number of hidden channels
-- `n_layers::Int`: Number of layers (depth)
-- `activation`: Activation function
-- `bias::Bool`: Whether to use bias in convolutions
-
-# Returns
-- `Lux.Chain`: Sequential chain of convolutional layers
-"""
-function build_encoder_decoder(
-    in_channels::Int,
-    out_channels::Int,
-    hidden_channels::Int,
-    n_layers::Int,
-    activation,
-    bias::Bool
-)
-    if n_layers < 1
-        throw(ArgumentError("n_layers must be at least 1"))
-    end
-    
-    layers = []
-    current_dim = in_channels
-    
-    # Build intermediate layers (all but the last)
-    for l in 1:(n_layers - 1)
-        # Conv layer with kaiming normal initialization (scale = sqrt(2/fan_in))
-        push!(layers, Lux.Conv(
-            (1, 1),
-            current_dim => hidden_channels,
-            activation,  
-            cross_correlation=true,
-            init_weight=kaiming_normal,
-            #use_bias=bias,
-            init_bias=zeros32
-        ))
-        current_dim = hidden_channels
-    end
-    
-    # Final layer with different initialization (scale = sqrt(1/fan_in))
-    final_init_weight = (rng, dims...) -> begin
-        scale = sqrt(1.0f0 / current_dim)
-        randn(rng, Float32, dims...) .* scale
-    end
-    
-    push!(layers, Lux.Conv(
-        (1, 1),
-        current_dim => out_channels,
-        identity,
-        cross_correlation=true,
-        init_weight=final_init_weight,
-        use_bias=bias,
-        init_bias=zeros32
-    ))
-    
-    return Lux.Chain(layers...)
-end
-
-"""
 Modified SFNO constructor with variable encoder/decoder depths.
 
 # New Arguments
@@ -102,7 +39,7 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
     # Setup positional embedding
     if positional_embedding in ["grid", "no_grid", "gaussian_grid"]
         if positional_embedding == "grid"
-            embedding = GridEmbedding2D()
+            embedding = GridEmbedding()
             in_channels += 2
         elseif positional_embedding == "gaussian_grid"
             embedding = GaussianGridEmbedding2D()
@@ -113,22 +50,24 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
         
         # Build encoder (lifting) with variable depth
         encoder_hidden_dim = Int(hidden_channels * lifting_channel_ratio)
-        lifting = build_encoder_decoder(
+        lifting = ESM_PINO.build_encoder_decoder(
             in_channels,
             hidden_channels,
             encoder_hidden_dim,
             num_encoder_layers,
+            2,
             activation,
             bias
         )
         
         # Build decoder (projection) with variable depth
         decoder_hidden_dim = Int(hidden_channels * projection_channel_ratio)
-        projection = build_encoder_decoder(
+        projection = ESM_PINO.build_encoder_decoder(
             hidden_channels,
             out_channels,
             decoder_hidden_dim,
             num_decoder_layers,
+            2,
             activation,
             bias
         )
@@ -319,7 +258,7 @@ function ESM_PINO.SFNO(
     # Setup positional embedding
     if positional_embedding in ["grid", "no_grid", "gaussian_grid"]
         if positional_embedding == "grid"
-            embedding = GridEmbedding2D()
+            embedding = GridEmbedding()
             in_channels += 2
         elseif positional_embedding == "gaussian_grid"
             embedding = GaussianGridEmbedding2D()
@@ -330,22 +269,24 @@ function ESM_PINO.SFNO(
         
         # Build encoder (lifting) with variable depth
         encoder_hidden_dim = Int(hidden_channels * lifting_channel_ratio)
-        lifting = build_encoder_decoder(
+        lifting = ESM_PINO.build_encoder_decoder(
             in_channels,
             hidden_channels,
             encoder_hidden_dim,
             num_encoder_layers,
+            2,
             activation,
             bias
         )
         
         # Build decoder (projection) with variable depth
         decoder_hidden_dim = Int(hidden_channels * projection_channel_ratio)
-        projection = build_encoder_decoder(
+        projection = ESM_PINO.build_encoder_decoder(
             hidden_channels,
             out_channels,
             decoder_hidden_dim,
             num_decoder_layers,
+            2,
             activation,
             bias
         )

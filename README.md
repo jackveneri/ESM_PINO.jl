@@ -1,6 +1,5 @@
 # ESM_PINO
 
-[comment]: <> ([![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://jackveneri.github.io/ESM_PINO.jl/stable/))
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://jackveneri.github.io/ESM_PINO.jl/dev/)
 [![Build Status](https://github.com/jackveneri/ESM_PINO.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/jackveneri/ESM_PINO.jl/actions/workflows/CI.yml?query=branch%3Amain)
 
@@ -60,7 +59,7 @@ layer = FourierNeuralOperator(
     hidden_channels=32,
     n_modes=(12, 12),
     n_layers=4,
-    positional_embedding="grid"
+    positional_embedding=true
 )
 
 ps = Lux.initialparameters(rng, layer)
@@ -71,6 +70,10 @@ x = randn(Float32, 64, 64, 3, 10)
 
 y, st_new = layer(x, ps, st)
 @show size(y)   # expect (64, 64, 2, 10)
+
+# Compute gradients
+using Zygote
+gr = Zygote.gradient(ps -> sum(layer(x, ps, st)[1]), ps)
 ```
 
 Another FNO example (1D data without grid embedding):
@@ -84,7 +87,7 @@ layer1d = FourierNeuralOperator(
     hidden_channels=16,
     n_modes=(8,),
     n_layers=3,
-    positional_embedding="no_grid1D"
+    positional_embedding=false
 )
 
 x1 = randn(Float32, 128, 1, 5)   # (L, C, Batch)
@@ -121,7 +124,6 @@ model2 = SFNO(ggsh, shgg;
     channel_mlp_expansion=2.0,
     positional_embedding="no_grid",
     outer_skip=true,
-    zsk=true
 )
 
 # Setup parameters and state

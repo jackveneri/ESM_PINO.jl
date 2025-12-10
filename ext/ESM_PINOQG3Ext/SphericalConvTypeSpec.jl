@@ -324,12 +324,15 @@ function (layer::ESM_PINO.SphericalConv{ESM_PINOQG3})(x::AbstractArray{T,4}, ps:
             # Remap and pad
             x_p = inverse_reorderQG3_indexes_4d(x_p)
             x_p = remap_array_components(x_p, layer.modes-1, size(layer.plan.shgg.P,3)÷2)
-            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, 0, 0, 0))    
+            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, 0, 0, 0))
+            x_res = inverse_reorderQG3_indexes_4d(x_extracted)
+            x_res = remap_array_components(x_res, layer.modes-1, size(layer.plan.shgg.P,3)÷2)
+            x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, 0, 0, 0))
+                
         else
             # CPU path
             x_extracted = reorderQG3_indexes_4d(x_tr)
-            x_extracted = x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
-            
+            x_extracted = x_extracted[:, 1:layer.modes, 1:2*layer.modes-1, :]
             # Apply operator based on type
             if layer.operator_type == :diagonal
                 # einsum: "bilm,oilm->bolm"
@@ -344,12 +347,15 @@ function (layer::ESM_PINO.SphericalConv{ESM_PINOQG3})(x::AbstractArray{T,4}, ps:
             
             # Pad
             x_p = inverse_reorderQG3_indexes_4d(x_p)
-            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes-1), 0, 0))   
+            x_res = inverse_reorderQG3_indexes_4d(x_extracted)
+            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes-1), 0, 0))
+            x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes-1), 0, 0))   
+   
         end
         
         # Transform back to grid
         x_out = QG3.transform_grid(x_pad, layer.plan.shgg)
-        res_out = QG3.transform_grid(x_tr, layer.plan.shgg)
+        res_out = QG3.transform_grid(x_res_pad, layer.plan.shgg)
         
         # Permute back to [lat, lon, channels, batch]
         x_out_perm = permutedims(x_out, (2, 3, 1, 4))

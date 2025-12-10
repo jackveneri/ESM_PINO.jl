@@ -1,36 +1,98 @@
 """
+Helper function to build encoder/decoder layers with variable depth.
+
+# Arguments
+- `in_channels::Int`: Number of input channels
+- `out_channels::Int`: Number of output channels  
+- `hidden_channels::Int`: Number of hidden channels
+- `n_layers::Int`: Number of layers (depth)
+- `spatial_dims::Int`: Number of spatial dimensions
+- `activation`: Activation function
+- `bias::Bool`: Whether to use bias in convolutions
+
+# Returns
+- `Lux.Chain`: Sequential chain of convolutional layers
+"""
+function build_encoder_decoder(
+    in_channels::Int,
+    out_channels::Int,
+    hidden_channels::Int,
+    n_layers::Int,
+    spatial_dims::Int,
+    activation,
+    bias::Bool
+)
+    if n_layers < 1
+        throw(ArgumentError("n_layers must be at least 1"))
+    end
+    
+    kernel_size = ntuple(_ -> 1, spatial_dims)
+    layers = []
+    current_dim = in_channels
+    
+    # Build intermediate layers (all but the last)
+    for l in 1:(n_layers - 1)
+        push!(layers, Lux.Conv(
+            kernel_size,
+            current_dim => hidden_channels,
+            activation,  
+            cross_correlation=true,
+            init_weight=kaiming_normal,
+            init_bias=zeros32
+        ))
+        current_dim = hidden_channels
+    end
+    
+    # Final layer with different initialization (scale = sqrt(1/fan_in))
+    final_init_weight = (rng, dims...) -> begin
+        scale = sqrt(1.0f0 / current_dim)
+        randn(rng, Float32, dims...) .* scale
+    end
+    
+    push!(layers, Lux.Conv(
+        kernel_size,
+        current_dim => out_channels,
+        identity,
+        cross_correlation=true,
+        init_weight=final_init_weight,
+        use_bias=bias,
+        init_bias=zeros32
+    ))
+    
+    return Lux.Chain(layers...)
+end
+
+"""
 $(TYPEDSIGNATURES)
 
-A Fourier Neural Operator (FNO) container that optionally includes positional embeddings,
-lifting and projection convolutions, and a stack of FNO blocks.
+A Fourier Neural Operator (FNO) container that works with any spatial dimensionality.
 
 # Arguments
 - `in_channels::Int`: Number of input channels.
 - `out_channels::Int`: Number of output channels.
 - `hidden_channels::Int=32`: Number of hidden channels used inside FNO blocks.
-- `n_modes::NTuple{N,Int}=(16, 16)`: Number of retained Fourier modes per spatial dimension.
+- `n_modes::NTuple{N,Int}`: Number of retained Fourier modes per spatial dimension.
 - `n_layers::Int=4`: Number of FNO blocks to stack.
+- `num_encoder_layers::Int=2`: Number of layers in the encoder (lifting).
+- `num_decoder_layers::Int=2`: Number of layers in the decoder (projection).
 - `lifting_channel_ratio::Int=2`: Channel expansion ratio used in the lifting layer.
 - `projection_channel_ratio::Int=2`: Channel expansion ratio used in the projection layer.
 - `channel_mlp_expansion::Number=2`: Expansion factor inside ChannelMLP of each block.
 - `activation=NNlib.gelu`: Activation function used in conv layers.
-- `positional_embedding`::AbstractString="grid": Choice of positional embedding:
-"grid", "no_grid" => 2D variants (GridEmbedding2D or NoOpLayer)
-"grid1D", "no_grid1D" => 1D variants (GridEmbedding1D or NoOpLayer)
-"grid3D", "no_grid3D" => 3D variants (GridEmbedding3D or NoOpLayer)
-- `use_norm_in_blocks::Bool=false`: Whether to use normalization layers inside FNO blocks.
+- `positional_embedding::Bool=true`: Whether to use GridEmbedding (default: true).
+- `grid_boundaries::Vector{Vector{Float32}}`: Boundaries for each spatial dimension (default: [0,1] for each).
+- `use_norm::Bool=false`: Whether to use normalization layers inside FNO blocks.
+- `bias::Bool=false`: Whether to use bias in convolutions.
 
-# Fields
-- `embedding`: Positional embedding layer (a GridEmbeddingND or NoOpLayer).
-- `lifting`: Lifting convolution(s) mapping in_channels -> hidden_channels.
-- `fno_blocks`: Repeated stack of FNO blocks appropriate to dimensionality.
-- `projection`: Projection convolution(s) mapping hidden_channels -> out_channels.
+# Notes
+- When `num_encoder_layers=2` and `num_decoder_layers=2`, this behaves like the original implementation
+- The spatial dimensionality is automatically inferred from the length of `n_modes`
 
 # Examples
 
 Example (2D data with grid embedding):
 ```julia
-using Lux, Random, ESM_PINO
+using Lux, Random
 
 rng = Random.default_rng()
 
@@ -40,7 +102,9 @@ layer = FourierNeuralOperator(
     hidden_channels=32,
     n_modes=(12, 12),
     n_layers=4,
-    positional_embedding="grid"
+    num_encoder_layers=2,
+    num_decoder_layers=2,
+    positional_embedding=true
 )
 
 ps = Lux.initialparameters(rng, layer)
@@ -53,18 +117,17 @@ y, st_new = layer(x, ps, st)
 @show size(y)   # expect (64, 64, 2, 10)
 ```
 
-Another FNO example (1D data without grid embedding):
-
+Example (1D data without grid embedding):
 ```julia
-using Lux, Random, ESM_PINO
-
 layer1d = FourierNeuralOperator(
     in_channels=1,
     out_channels=1,
     hidden_channels=16,
     n_modes=(8,),
     n_layers=3,
-    positional_embedding="no_grid1D"
+    num_encoder_layers=1,
+    num_decoder_layers=1,
+    positional_embedding=false
 )
 
 x1 = randn(Float32, 128, 1, 5)   # (L, C, Batch)
@@ -74,12 +137,33 @@ y1, _ = layer1d(x1,
 )
 @show size(y1)   # expect (128, 1, 5)
 ```
+
+Example (3D data with grid embedding):
+```julia
+layer3d = FourierNeuralOperator(
+    in_channels=2,
+    out_channels=1,
+    hidden_channels=24,
+    n_modes=(8, 8, 8),
+    n_layers=3,
+    num_encoder_layers=2,
+    num_decoder_layers=2,
+    positional_embedding=true
+)
+
+x3 = randn(Float32, 32, 32, 32, 2, 4)   # (H, W, D, C, Batch)
+y3, _ = layer3d(x3,
+    Lux.initialparameters(rng, layer3d),
+    Lux.initialstates(rng, layer3d)
+)
+@show size(y3)   # expect (32, 32, 32, 1, 4)
+```
 """
-struct FourierNeuralOperator{F,S,T} <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :fno_blocks, :projection)}
-    embedding ::Union{Lux.NoOpLayer, GridEmbedding2D, GridEmbedding1D, GridEmbedding3D}
-    lifting ::Lux.AbstractLuxLayer
-    fno_blocks::Lux.RepeatedLayer{F,S,FNO_Block{T}}
-    projection ::Lux.AbstractLuxLayer
+struct FourierNeuralOperator{T,N} <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :fno_blocks, :projection)}
+    embedding::Union{Lux.NoOpLayer, GridEmbedding}
+    lifting::Lux.AbstractLuxLayer
+    fno_blocks::Lux.Chain{<:NamedTuple{<:Any,<:Tuple{Vararg{FNO_Block{T,N}}}}}
+    projection::Lux.AbstractLuxLayer
 end
 
 function FourierNeuralOperator(;
@@ -88,123 +172,73 @@ function FourierNeuralOperator(;
     hidden_channels::Int=32,
     n_modes::NTuple{N,Integer}=(16, 16),
     n_layers::Int=4,
+    num_encoder_layers::Int=2,
+    num_decoder_layers::Int=2,
     lifting_channel_ratio::Int=2,
     projection_channel_ratio::Int=2,
     channel_mlp_expansion::Number=2,
     activation=NNlib.gelu,
-    positional_embedding::AbstractString="grid",
-    use_norm_in_blocks::Bool=false,  # New option to control normalization in FNO blocks
+    positional_embedding::Bool=true,
+    grid_boundaries::Union{Nothing,Vector{Vector{Float32}}}=nothing,
+    use_norm::Bool=false,
+    bias::Bool=false,
 ) where N
     
-    n_dim = length(n_modes)
-    
-    # Validate positional embedding type early
-    _validate_positional_embedding(positional_embedding, n_dim)
+    spatial_dims = length(n_modes)
     
     # Create embedding layer and adjust input channels if needed
-    embedding, adjusted_in_channels = _create_embedding_and_adjust_channels(
-        positional_embedding, in_channels, n_dim
-    )
+    if positional_embedding
+        if isnothing(grid_boundaries)
+            # Default boundaries: [0, 1] for each spatial dimension
+            grid_boundaries = [Float32[0, 1] for _ in 1:spatial_dims]
+        end
+        embedding = GridEmbedding(grid_boundaries)
+        adjusted_in_channels = in_channels + spatial_dims
+    else
+        embedding = Lux.NoOpLayer()
+        adjusted_in_channels = in_channels
+    end
     
-    # Create the main FNO components based on dimension
-    lifting, fno_blocks, projection = _create_fno_components(
-        positional_embedding,
+    # Build encoder (lifting) with variable depth
+    encoder_hidden_dim = Int(hidden_channels * lifting_channel_ratio)
+    lifting = build_encoder_decoder(
         adjusted_in_channels,
-        out_channels,
         hidden_channels,
-        n_modes,
-        n_layers,
-        lifting_channel_ratio,
-        projection_channel_ratio,
-        channel_mlp_expansion,
+        encoder_hidden_dim,
+        num_encoder_layers,
+        spatial_dims,
         activation,
-        use_norm_in_blocks  # Pass the normalization flag
+        bias
     )
     
-    return FourierNeuralOperator(embedding, lifting, fno_blocks, projection)
-end
-
-function _create_fno_components(
-    embedding_type::AbstractString,
-    in_channels::Int,
-    out_channels::Int,
-    hidden_channels::Int,
-    n_modes::NTuple{N,Integer},
-    n_layers::Int,
-    lifting_channel_ratio::Int,
-    projection_channel_ratio::Int,
-    channel_mlp_expansion::Number,
-    activation,
-    use_norm_in_blocks::Bool  # New parameter
-) where N
-    
-    # Determine convolution kernel and FNO block type based on embedding
-    kernel, fno_block_type = _get_conv_and_block_types(embedding_type)
-    
-    # Create lifting network
-    lifting_channels = Int(lifting_channel_ratio * hidden_channels)
-    lifting = Chain(
-        Conv(kernel, in_channels => lifting_channels, activation),
-        Conv(kernel, lifting_channels => hidden_channels, identity),
-    )
-    
-    # Create projection network
-    projection_channels = Int(projection_channel_ratio * hidden_channels)
-    projection = Chain(
-        Conv(kernel, hidden_channels => projection_channels, activation),
-        Conv(kernel, projection_channels => out_channels, identity),
+    # Build decoder (projection) with variable depth
+    decoder_hidden_dim = Int(hidden_channels * projection_channel_ratio)
+    projection = build_encoder_decoder(
+        hidden_channels,
+        out_channels,
+        decoder_hidden_dim,
+        num_decoder_layers,
+        spatial_dims,
+        activation,
+        bias
     )
     
     # Create FNO blocks with optional normalization
-    fno_blocks = RepeatedLayer(
-        fno_block_type(
+    fno_blocks = Chain(
+        [FNO_Block(
             hidden_channels, 
             n_modes; 
             expansion_factor=channel_mlp_expansion, 
             activation=activation,
-            use_norm=use_norm_in_blocks  # Pass to block constructor
-        ), 
-        repeats=Val(n_layers)
+            use_norm=use_norm
+        ) for _ in 1:n_layers]... 
     )
     
-    return lifting, fno_blocks, projection
+    return FourierNeuralOperator{ComplexF32,N}(embedding, lifting, fno_blocks, projection)
 end
 
-function _validate_positional_embedding(embedding_type::AbstractString, n_dim::Int)
-    valid_embeddings = ("grid", "no_grid", "grid1D", "no_grid1D", "grid3D", "no_grid3D", "gaussian_grid")
-    if embedding_type ∉ valid_embeddings
-        throw(ArgumentError(
-            "Invalid positional embedding type. Supported: 'grid', 'grid1D', 'grid3D' and their 'no_grid' variants, as well as 'gaussian_grid'."
-        ))
-    end
-end
-
-function _create_embedding_and_adjust_channels(embedding_type::AbstractString, in_channels::Int, n_dim::Int)
-    if embedding_type == "grid"
-        return GridEmbedding2D(), in_channels + n_dim
-    elseif embedding_type == "grid1D"
-        return GridEmbedding1D(), in_channels + n_dim
-    elseif embedding_type == "grid3D"
-        return GridEmbedding3D(), in_channels + n_dim
-    elseif embedding_type == "gaussian_grid"
-        return GaussianGridEmbedding2D(), in_channels + n_dim
-    else 
-        return Lux.NoOpLayer(), in_channels
-    end
-end
-
-function _get_conv_and_block_types(embedding_type::AbstractString)
-    if embedding_type in ("grid", "no_grid", "gaussian_grid")
-        return (1, 1), FNO_Block
-    elseif embedding_type in ("grid1D", "no_grid1D")
-        return (1,), FNO_Block1D
-    else  # "grid3D", "no_grid3D"
-        return (1, 1, 1), FNO_Block3D
-    end
-end
-
-function Lux.initialparameters(rng::AbstractRNG, layer::FourierNeuralOperator)
-    ps_embedding = isnothing(layer.embedding) ? NamedTuple() : Lux.initialparameters(rng, layer.embedding)
+function Lux.initialparameters(rng::AbstractRNG, layer::FourierNeuralOperator{T,N}) where {T,N}
+    ps_embedding = Lux.initialparameters(rng, layer.embedding)
     ps_lifting = Lux.initialparameters(rng, layer.lifting)
     ps_fno_blocks = Lux.initialparameters(rng, layer.fno_blocks)
     ps_projection = Lux.initialparameters(rng, layer.projection)
@@ -216,8 +250,8 @@ function Lux.initialparameters(rng::AbstractRNG, layer::FourierNeuralOperator)
     )
 end
 
-function Lux.initialstates(rng::AbstractRNG, layer::FourierNeuralOperator)
-    st_embedding = isnothing(layer.embedding) ? NamedTuple() : Lux.initialstates(rng, layer.embedding)
+function Lux.initialstates(rng::AbstractRNG, layer::FourierNeuralOperator{T,N}) where {T,N}
+    st_embedding = Lux.initialstates(rng, layer.embedding)
     st_lifting = Lux.initialstates(rng, layer.lifting)
     st_fno_blocks = Lux.initialstates(rng, layer.fno_blocks)
     st_projection = Lux.initialstates(rng, layer.projection)
@@ -229,13 +263,8 @@ function Lux.initialstates(rng::AbstractRNG, layer::FourierNeuralOperator)
     )
 end
 
-function (layer::FourierNeuralOperator)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
-    if !isnothing(layer.embedding)
-        x, st_embedding = layer.embedding(x, ps.embedding, st.embedding)
-    else
-        st_embedding = st.embedding
-    end
-    
+function (layer::FourierNeuralOperator{T,N})(x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {T,N}
+    x, st_embedding = layer.embedding(x, ps.embedding, st.embedding)
     x, st_lifting = layer.lifting(x, ps.lifting, st.lifting)
     x, st_fno_blocks = layer.fno_blocks(x, ps.fno_blocks, st.fno_blocks)
     x, st_projection = layer.projection(x, ps.projection, st.projection)

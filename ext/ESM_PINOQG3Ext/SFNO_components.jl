@@ -199,7 +199,7 @@ function ESM_PINO.SFNO_Block(
     gpu::Bool=true, 
     operator_type::Symbol = :driscoll_healy, # Changed from zsk::Bool
     use_norm::Bool=false,
-    soft_gating=false,
+    soft_gating::Bool=false,
     bias::Bool=false
     )
     spherical_kernel = ESM_PINO.SphericalKernel(channels, pars; use_norm=use_norm, modes=modes, batch_size=batch_size, gpu=gpu, operator_type=operator_type, bias=bias)
@@ -247,7 +247,7 @@ function ESM_PINO.SFNO_Block(
     skip::Bool=true, 
     operator_type::Symbol = :driscoll_healy,
     use_norm::Bool=false,
-    soft_gating=false,
+    soft_gating::Bool=false,
     bias::Bool=false
     )
     spherical_kernel = ESM_PINO.SphericalKernel(channels, ggsh, shgg; use_norm=use_norm, modes=modes, operator_type=operator_type, bias=bias)

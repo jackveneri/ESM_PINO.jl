@@ -7,8 +7,6 @@ using DocStringExtensions
 
 include("FD_schemes.jl")
 include("FNO_components.jl")
-include("FNO1D_components.jl")
-include("FNO3D_components.jl")
 include("losses.jl")
 include("utilities.jl")
 include("Spherical_Conv.jl")
@@ -16,5 +14,5 @@ include("SFNO_components.jl")
 include("FNO.jl")
 include("SFNO.jl")
 
-export ChannelMLP, SoftGating, GridEmbedding2D, FourierNeuralOperator, SFNO, GaussianGridEmbedding2D
+export ChannelMLP, SoftGating, GridEmbedding, FourierNeuralOperator, SFNO, GaussianGridEmbedding2D
 end
