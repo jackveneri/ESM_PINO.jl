@@ -197,13 +197,15 @@ function ESM_PINO.SphericalConv(
     # Correct modes upfront
     if gpu
         corrected_modes = min(modes, pars.N_lats)
+        if modes != corrected_modes
+        @warn "modes ($modes) exceeds N_lats ($(pars.N_lats)). Setting modes = $(pars.N_lats)."
+        end
     else
         corrected_modes = min(modes, pars.L)
+        if modes != corrected_modes
+        @warn "modes ($modes) exceeds maximum L ($(pars.L)). Setting modes = $(pars.L)."
+        end
     end
-    if modes != corrected_modes
-        @warn "modes ($modes) exceeds N_lats ($(pars.N_lats)). Setting modes = $(pars.N_lats)."
-    end
-    
     # GPU setup
     if gpu
         QG3.gpuon()
