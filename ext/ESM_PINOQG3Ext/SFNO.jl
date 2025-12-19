@@ -150,7 +150,7 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
         push!(blocks, final_block)
         
         sfno_blocks = Lux.Chain(blocks...)
-        plan = ESM_PINOQG3(ggsh_outer, shgg_outer)
+        plan = ESM_PINOQG3(ggsh_outer, shgg_outer, ones(Int,1,1,1,1),ones(Int,1,1,1,1), create_remap_plan(corrected_modes-1, size(ggsh_outer.Pw,2)))
     else
         throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid', 'gaussian_grid' and 'no_grid'."))
     end
@@ -360,7 +360,7 @@ function ESM_PINO.SFNO(
             bias=bias)
         push!(blocks, final_block)
         sfno_blocks = Lux.Chain(blocks...)
-        plan = ESM_PINOQG3(ggsh, shgg) #dummy plan to satisfy type parameter    
+        plan = ESM_PINOQG3(ggsh, shgg,ones(Int,1,1,1,1),ones(Int,1,1,1,1), create_remap_plan(corrected_modes-1, size(ggsh_outer.Pw,2))) #dummy plan to satisfy type parameter    
     else
             throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid', 'gaussian_grid' and 'no_grid'."))
     end

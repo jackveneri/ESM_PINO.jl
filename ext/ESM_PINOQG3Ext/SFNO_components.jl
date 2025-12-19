@@ -30,7 +30,7 @@ function ESM_PINO.SphericalKernel(hidden_channels::Int, pars::QG3.QG3ModelParame
                                     batch_size::Int=1, 
                                     gpu::Bool=true, 
                                     operator_type::Symbol = :driscoll_healy, # Changed from zsk::Bool
-                                    inner_mixing::Bool=false,
+                                    inner_mixing::Bool=true,
                                     bias::Bool=false
                                     )  
     if inner_mixing
@@ -71,7 +71,7 @@ function ESM_PINO.SphericalKernel(hidden_channels::Int, ggsh::QG3.GaussianGridto
                                     use_norm=false, 
                                     modes::Int=ggsh.output_size[1], 
                                     operator_type::Symbol = :driscoll_healy, # Changed from zsk::Bool
-                                    inner_mixing::Bool=false,
+                                    inner_mixing::Bool=true,
                                     bias::Bool=false
                                     )  
     if inner_mixing

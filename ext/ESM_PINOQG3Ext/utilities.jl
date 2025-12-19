@@ -70,7 +70,7 @@ Used mainly to handle SH transforms.
 
 # Arguments
 
--`L::Int`: Spectral truncation level (maximum degree).
+- `L::Int`: Spectral truncation level (maximum degree).
 
 - `n_lat::Int`: Number of Gaussian latitudes.
 
@@ -111,99 +111,113 @@ function qg3pars_constructor_helper(L::Int, qg3ppars::QG3.QG3ModelParameters; NF
     QG3ModelParameters(L, lats, lons, LS, h)
 end
 
+
 """
-    remap_array_components(arr::AbstractArray{T,4}, l::Int, c::Int) where T
+    create_remap_plan(l::Int, c::Int)
 
-Remap a 4D array from ordering (0,-1,1,-2,2,...,-l,l) to (0,1,2,...,l,...,c,-1,-2,...,-l,...,-(c-1)).
-
-# Arguments
-- `arr`: 4D array of size (i, j, 2l+1, k) with third dimension in order: 0,-1,1,-2,2,...,-l,l
-- `l`: Original maximum index (third dimension has 2l+1 elements)
-- `c`: New maximum index (output third dimension will have 2c elements)
-
-# Returns
-- 4D array of size (i, j, 2c, k) with reordered and padded third dimension
-
-# Examples
-```julia
-# CPU example
-arr = randn(3, 4, 5, 2)  # l=2, so 2*2+1=5
-result = remap_array_components(arr, 2, 4)  # c=4, output size (3,4,8,2)
-
-# GPU example
-arr_gpu = CuArray(randn(3, 4, 5, 2))
-result_gpu = remap_array_components(arr_gpu, 2, 4)
-```
+Create a precomputed plan for remapping arrays from size 2l+1 to 2c.
 """
-function remap_array_components(arr::AbstractArray{T,4}, l::Int, c::Int) where T
-    @assert c > l "c must be greater than l"
-    @assert size(arr, 3) == 2l + 1 "Third dimension must have size 2l+1"
+function create_remap_plan(l::Int, c::Int)
+    @assert c >= l "c must be >= l"
     
-    i, j, _, k = size(arr)
-    
-    # Create output array with zeros (compatible with GPU)
-    out = similar(arr, i, j, 2c, k)
-    fill!(out, zero(T))
-    
-    # Map from old ordering to new ordering
-    # Old: 0, -1, 1, -2, 2, ..., -l, l (indices 1 to 2l+1)
-    # New: 0, 1, 2, ..., l, ..., c, -1, -2, ..., -l, ..., -(c-1) (indices 1 to 2c)
+    src_indices = Int[]
+    dst_indices = Int[]
     
     # Element 0: position 1 → position 1
-    out[:, :, 1, :] = arr[:, :, 1, :]
+    push!(src_indices, 1)
+    push!(dst_indices, 1)
     
     # Positive elements: 1,2,...,l at old positions 3,5,7,...,2l+1
     # go to new positions 2,3,...,l+1
     for m in 1:l
-        old_idx = 2m + 1
-        new_idx = m + 1
-        out[:, :, new_idx, :] = arr[:, :, old_idx, :]
+        push!(src_indices, 2m + 1)
+        push!(dst_indices, m + 1)
     end
     
     # Negative elements: -1,-2,...,-l at old positions 2,4,6,...,2l
     # go to new positions c+1, c+2, ..., c+l
     for m in 1:l
-        old_idx = 2m
-        new_idx = c + m + 1
-        out[:, :, new_idx, :] = arr[:, :, old_idx, :]
+        push!(src_indices, 2m)
+        push!(dst_indices, c + m + 1)
     end
     
-    # Positions l+2 to c and c+l+1 to 2c remain zero (padding)
+    return RemapPlan(l, c, src_indices, dst_indices, 2c, 2l + 1)
+end
+
+"""
+    remap_array_components_fast(arr::AbstractArray{T,4}, plan::RemapPlan)
+
+Fast array remapping using a precomputed plan.
+"""
+function remap_array_components_fast(arr::AbstractArray{T,4}, plan::RemapPlan) where T
+    @assert size(arr, 3) == plan.input_size_3 "Input size mismatch"
+    
+    i, j, _, k = size(arr)
+    
+    # Pad with zeros to output size
+    pad_amount = plan.output_size_3 - plan.input_size_3
+    if pad_amount > 0
+        # Pad at the end of dimension 3
+        padded = NNlib.pad_constant(arr, (0, 0, 0, pad_amount, 0, 0), zero(T))
+    else
+        padded = arr
+    end
+    
+    # Create index array for gathering
+    # We'll use a permutation-like approach with selectdim
+    out = similar(padded)
+    
+    # Build a permutation vector for dimension 3
+    perm = collect(1:plan.output_size_3)
+    
+    # The inverse mapping: where does each output position come from?
+    # Initialize with identity (elements that aren't remapped stay at their padded position)
+    for i in eachindex(plan.src_indices)
+        src = plan.src_indices[i]
+        dst = plan.dst_indices[i]
+        perm[dst] = src
+    end
+    
+    # Apply permutation using selectdim (GPU-compatible)
+    return cat([selectdim(padded, 3, perm[i]) for i in 1:plan.output_size_3]..., dims=3)
+end
+
+# More efficient version avoiding intermediate allocations
+function remap_array_components_fast_v2(arr::AbstractArray{T,4}, plan::RemapPlan) where T
+    @assert size(arr, 3) == plan.input_size_3 "Input size mismatch"
+    
+    i, j, _, k = size(arr)
+    out = similar(arr, i, j, plan.output_size_3, k)
+    fill!(out, zero(T))
+    
+    # Copy data according to plan (vectorized operations)
+    @inbounds for idx in eachindex(plan.src_indices)
+        src = plan.src_indices[idx]
+        dst = plan.dst_indices[idx]
+        out[:, :, dst, :] .= view(arr, :, :, src, :)
+    end
     
     return out
 end
 
-# Define custom reverse-mode rule for Zygote compatibility
-function Zygote.rrule(::typeof(remap_array_components), arr::AbstractArray{T,4}, l::Int, c::Int) where T
-    result = remap_array_components(arr, l, c)
+function Zygote.rrule(::typeof(remap_array_components_fast_v2), arr::AbstractArray{T,4}, plan::RemapPlan) where T
+    result = remap_array_components_fast_v2(arr, plan)
     
-    function remap_pullback(Δ)
-        # Allocate gradient for input array
+    function remap_fast_pullback(Δ)
         ∇arr = similar(arr)
         fill!(∇arr, zero(T))
         
         # Reverse the mapping
-        # Element 0
-        ∇arr[:, :, 1, :] = Δ[:, :, 1, :]
-        
-        # Positive elements (were at odd positions 3,5,7,...)
-        for m in 1:l
-            old_idx = 2m + 1
-            new_idx = m + 1
-            ∇arr[:, :, old_idx, :] = Δ[:, :, new_idx, :]
+        @inbounds for idx in eachindex(plan.src_indices)
+            src = plan.src_indices[idx]
+            dst = plan.dst_indices[idx]
+            ∇arr[:, :, src, :] .= Δ[:, :, dst, :]
         end
         
-        # Negative elements (were at even positions 2,4,6,...)
-        for m in 1:l
-            old_idx = 2m
-            new_idx = c + m + 1
-            ∇arr[:, :, old_idx, :] = Δ[:, :, new_idx, :]
-        end
-        
-        return (NoTangent(), ∇arr, NoTangent(), NoTangent())
+        return (NoTangent(), ∇arr, NoTangent())
     end
     
-    return result, remap_pullback
+    return result, remap_fast_pullback
 end
 """
     $(TYPEDSIGNATURES)
@@ -516,7 +530,8 @@ function train_model(
     
     # Global iteration counter
     total_iters = 0
-    
+    valid_loss_min = Inf
+    no_improv_counter = 0
     # ========== TRAINING LOOP ==========
     for epoch in 1:nepochs
         epoch_start = time()
@@ -603,7 +618,13 @@ function train_model(
         
         # Average validation losses
         valid_loss = valid_loss / n_valid_samples
-        
+        if valid_loss < valid_loss_min
+            no_improv_counter = 0
+            valid_loss_min = valid_loss
+        else
+            no_improv_counter += 1
+        end
+
         epoch_time = time() - epoch_start
         
         # ===== LOGGING =====
@@ -618,7 +639,15 @@ function train_model(
             println("-"^80)
             @printf "Validation Loss (Computed as Data Loss only):   %.9f\n" valid_loss
         end
-        
+        if no_improv_counter >= 3
+            println("No improvement in validation loss for 3 consecutive epochs. Reducing learning rate by a factor 2.")
+            lr_0 /= 2
+            Optimisers.adjust!(train_state, lr_0)
+        end
+        if no_improv_counter >= 10
+            println("No improvement in validation loss for 10 consecutive epochs. Early stopping triggered.")
+            break
+        end
         GC.gc()  # Garbage collection after each epoch
     end
     

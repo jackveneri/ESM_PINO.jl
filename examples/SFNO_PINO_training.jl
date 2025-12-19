@@ -9,7 +9,7 @@ const ESM_PINOQG3 = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext)
 const gdev = gpu_device()
 const cdev = cpu_device()
 
-dt = 3 #QG3.p.time_unit
+dt = 1 #QG3.p.time_unit
 maxiters = 100
 hidden_channels = 32
 batch_size = 4
@@ -74,7 +74,7 @@ fine_tuned_model = ESM_PINOQG3.fine_tuning(q_0_train[:,:,:,1:size(autoregressive
                                             )
 
 
-model = trained_model.model
-ps = cdev(trained_model.ps)
-st = cdev(trained_model.st)
+model = fine_tuned_model.model
+ps = cdev(fine_tuned_model.ps)
+st = cdev(fine_tuned_model.st)
 @save joinpath(root, "models/SFNO_results.jld2") model ps st dt N_sims μ σ

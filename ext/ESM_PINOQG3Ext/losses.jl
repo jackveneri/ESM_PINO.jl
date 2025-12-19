@@ -100,8 +100,8 @@ mse_loss_function_QG3(u, target, input) =
 function geometric_mse_loss_function_QG3(output::AbstractArray, target::AbstractArray, pars::QG3_Physics_Parameters)
     @views begin
         w = pars.weights
-        geom_cw_loss = sqrt.(sum(@.((output - target)^2 * w), dims=(1,2)) ./
-                            sum(@.( target^2 * w), dims=(1,2)))
+        geom_cw_loss = sqrt.((sum(@.((output - target)^2 * w), dims=(1,2)).+ 1f-6) ./
+                            sum(@.( target^2 * w), dims=(1,2))) 
         return sum(geom_cw_loss) / length(geom_cw_loss)   
     end      
 end
@@ -109,7 +109,7 @@ function geometric_mse_loss_function_QG3(u, target, input, pars::QG3_Physics_Par
     @views begin
         w = pars.weights
         u_pred = u(input)
-        geom_cw_loss = sqrt.(sum(@.((u_pred - target)^2 * w), dims=(1,2)) ./
+        geom_cw_loss = sqrt.((sum(@.((u_pred - target)^2 * w), dims=(1,2)) .+ 1f-6) ./
                             sum(@.( target^2 * w), dims=(1,2)))
         return sum(geom_cw_loss) / length(geom_cw_loss)    
     end
