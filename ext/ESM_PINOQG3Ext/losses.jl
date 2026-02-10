@@ -1,6 +1,3 @@
-############################
-# QG3 Physics Parameters
-############################
 struct QG3_Physics_Parameters
     dt::Real
     qg3p::QG3.QG3Model
@@ -24,14 +21,14 @@ function QG3_Physics_Parameters(;n_lat=32, modes=21, batch_size=1, gpu::Bool=tru
     ggsh = QG3.GaussianGridtoSHTransform(pars, N_batch=batch_size)
     shgg = QG3.SHtoGaussianGridTransform(pars, N_batch=batch_size)
     qg3p = CUDA.@allowscalar QG3Model(pars)
-    #geom_weights = QG3.togpu(reshape(pars.μ, 1, : , 1, 1))
+    geom_weights = QG3.togpu(reshape(cos.(pars.lats), :, 1, 1, 1))
     quad_weights = QG3.togpu(reshape(QG3.compute_GaussWeights(pars), :, 1, 1, 1))
-    #weights = geom_weights .* quad_weights
-    S = CUDA.@allowscalar QG3.reorder_SH_gpu(QG3.zeros_SH(pars),pars)
+    weights = geom_weights .* quad_weights
+    S = CUDA.@allowscalar QG3.reorder_SH_gpu(QG3.zeros_SH(pars), pars)
     dt = σ = 1
     μ = 0
     QG3.gpuon()
-    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, quad_weights)
+    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, weights)
 end 
 
 function QG3_Physics_Parameters(pars::QG3.QG3ModelParameters; batch_size=1, gpu::Bool=true)
@@ -41,14 +38,14 @@ function QG3_Physics_Parameters(pars::QG3.QG3ModelParameters; batch_size=1, gpu:
     ggsh = QG3.GaussianGridtoSHTransform(pars, N_batch=batch_size)
     shgg = QG3.SHtoGaussianGridTransform(pars, N_batch=batch_size)
     qg3p = CUDA.@allowscalar QG3Model(pars)
-    #geom_weights = QG3.togpu(reshape(pars.μ, :,1 , 1, 1))
+    geom_weights = QG3.togpu(reshape(cos.(pars.lats), :, 1, 1, 1))
     quad_weights = QG3.togpu(reshape(QG3.compute_GaussWeights(pars), :, 1, 1, 1))
-    #weights = geom_weights .* quad_weights
+    weights = geom_weights .* quad_weights
     S = CUDA.@allowscalar QG3.reorder_SH_gpu(QG3.zeros_SH(pars),pars)
     dt = σ = 1
     μ = 0
     QG3.gpuon()
-    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, quad_weights) 
+    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, weights) 
 end
 
 function QG3_Physics_Parameters(dt::Real,
@@ -64,11 +61,16 @@ function QG3_Physics_Parameters(dt::Real,
     ggsh = QG3.GaussianGridtoSHTransform(qg3p.p, N_batch=batch_size)
     shgg = QG3.SHtoGaussianGridTransform(qg3p.p, N_batch=batch_size)
 
-    #geom_weights = QG3.togpu(reshape(qg3p.p.μ, :, 1, 1, 1))
+    geom_weights = QG3.togpu(reshape(cos.(qg3p.p.lats), :, 1, 1, 1))
     quad_weights = QG3.togpu(reshape(QG3.compute_GaussWeights(qg3p.p), :, 1, 1, 1))
-    #weights = geom_weights .* quad_weights
+    weights = geom_weights .* quad_weights
     QG3.gpuon()
-    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, quad_weights)
+    if gpu
+        weights = QG3.togpu(weights)
+        pars = qg3p.p
+        qg3p = CUDA.@allowscalar QG3Model(pars)
+    end
+    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, weights)
 end
 
 function QG3_Physics_Parameters(dt::Real,
@@ -82,15 +84,20 @@ function QG3_Physics_Parameters(dt::Real,
     if !gpu
         QG3.gpuoff()
     end
-    #geom_weights = QG3.togpu(reshape(qg3p.p.μ, :, 1, 1, 1))
+    geom_weights = QG3.togpu(reshape(cos.(qg3p.p.lats), :, 1, 1, 1))
     quad_weights = QG3.togpu(reshape(QG3.compute_GaussWeights(qg3p.p), :, 1, 1, 1))
-    #weights = geom_weights .* quad_weights
+    weights = geom_weights .* quad_weights
     QG3.gpuon()
-    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, quad_weights)
+    if gpu
+        weights = QG3.togpu(weights)
+        pars = qg3p.p
+        qg3p = CUDA.@allowscalar QG3Model(pars)
+    end
+    return QG3_Physics_Parameters(dt, qg3p, S, ggsh, shgg, μ, σ, weights)
 end
-############################
+
 # Base Loss Components
-############################
+
 
 # Simple MSE loss (baseline)
 mse_loss_function_QG3(u, target, input) =
@@ -100,21 +107,21 @@ mse_loss_function_QG3(u, target, input) =
 function geometric_mse_loss_function_QG3(output::AbstractArray, target::AbstractArray, pars::QG3_Physics_Parameters)
     @views begin
         w = pars.weights
-        geom_cw_loss = sqrt.((sum(@.((output - target)^2 * w), dims=(1,2)).+ 1f-6) ./
+        geom_cw_loss = sqrt.((sum(@.((output - target)^2 * w), dims=(1,2))) ./
                             sum(@.( target^2 * w), dims=(1,2))) 
         return sum(geom_cw_loss) / length(geom_cw_loss)   
     end      
 end
-function geometric_mse_loss_function_QG3(u, target, input, pars::QG3_Physics_Parameters)
+function geometric_mse_loss_function_QG3(u, target::AbstractArray{T,4}, input::AbstractArray{T,4}, pars::QG3_Physics_Parameters) where T
     @views begin
         w = pars.weights
         u_pred = u(input)
-        geom_cw_loss = sqrt.((sum(@.((u_pred - target)^2 * w), dims=(1,2)) .+ 1f-6) ./
+        geom_cw_loss = sqrt.((sum(@.((u_pred - target)^2 * w), dims=(1,2))) ./
                             sum(@.( target^2 * w), dims=(1,2)))
         return sum(geom_cw_loss) / length(geom_cw_loss)    
     end
 end
-function angular_power_spectrum_batch_gpu(A::AbstractArray{T,4}, p::QG3ModelParameters{T}, k_indices) where T
+function angular_power_spectrum_batch_gpu(A::AbstractArray{T,4}, k_indices) where T
     # A is (n_dim1, n_lat, n_lon, n_batch)
     n_dim1, L, _, n_batch = size(A)
     
@@ -142,7 +149,7 @@ function angular_power_spectrum_batch_gpu(A::AbstractArray{T,4}, p::QG3ModelPara
     return reshape(stacked, length(k_indices), n_dim1 * n_batch)
 end
 
-function spectral_loss_function_QG3(u, target, input, pars::QG3_Physics_Parameters; k_min::Int=1, k_max::Int=500)
+function spectral_loss_function_QG3(u, target::AbstractArray{T,4}, input::AbstractArray{T,4}, pars::QG3_Physics_Parameters; k_min::Int=1, k_max::Int=500) where T
     @assert k_min < k_max "k_min must be smaller than k_max"
     u_pred = u(input)
     u_pred_sh = QG3.transform_SH(permutedims(u_pred, (3, 1, 2, 4)), pars.ggsh)
@@ -155,38 +162,63 @@ function spectral_loss_function_QG3(u, target, input, pars::QG3_Physics_Paramete
     end
     
     # Compute on GPU
-    u_pred_ps = angular_power_spectrum_batch_gpu(u_pred_sh, pars.qg3p.p, k_indices)
-    target_ps = angular_power_spectrum_batch_gpu(target_sh, pars.qg3p.p, k_indices)
+    u_pred_ps = angular_power_spectrum_batch_gpu(u_pred_sh, k_indices)
+    target_ps = angular_power_spectrum_batch_gpu(target_sh, k_indices)
     
     spectral_loss = sqrt.(sum((u_pred_ps .- target_ps).^2, dims=1))
     return sum(spectral_loss) / length(spectral_loss)
 end
 
 # Physics-informed residual loss
-function physics_informed_loss_QG3(u, q_0, pars::QG3_Physics_Parameters)
+function physics_informed_loss_QG3(u, q_0::AbstractArray{T,4}, pars::QG3_Physics_Parameters; bc=true, state_eq=true) where T
     @views begin
         σ = pars.σ
         μ = pars.μ
-        q_pred = ESM_PINO.denormalize_data(u(q_0), μ, σ)
-        q_0_denorm = ESM_PINO.denormalize_data(q_0, μ, σ)
+        q_pred = u(q_0)
+        if size(q_pred,3) == 3
+            if bc
+                length_scale = 2π .* pars.qg3p.p.distance_unit .* pars.qg3p.cosϕ ./ pars.qg3p.p.N_lons
+                bc_term = mean(abs2, (q_pred[:,end,:,:] .- q_pred[:,1,:,:]) ./ length_scale)
+            end
+            q_pred_denorm = ESM_PINO.denormalize_data(q_pred, μ, σ)
+            q_0_denorm = ESM_PINO.denormalize_data(q_0, μ, σ)
 
-        ∂u_∂t = (q_pred .- q_0_denorm) ./ pars.dt
-        ∂u_∂t = permutedims(∂u_∂t, (3, 1, 2, 4))
+            ∂u_∂t = (q_pred_denorm .- q_0_denorm) ./ pars.dt
+            ∂u_∂t = permutedims(∂u_∂t, (3, 1, 2, 4))
 
-        q_pred_SH = QG3.transform_SH(permutedims(q_pred, (3, 1, 2, 4)), pars.ggsh)
-        rhs_list = map(x -> QG3.QG3MM_gpu(x, (pars.qg3p, pars.S), (0,1)), eachslice(q_pred_SH; dims=4))
-        rhs = reduce((acc, x) -> cat(acc, x; dims=4), rhs_list)
-        rhs_grid = QG3.transform_grid(rhs, pars.shgg)
-        residual = ∂u_∂t .- rhs_grid
-        return mean(abs2, residual)    
-    end
+            q_0_SH = QG3.transform_SH(permutedims(q_0_denorm, (3, 1, 2, 4)), pars.ggsh)
+            rhs_list = map(x -> QG3.QG3MM_gpu(x, (pars.qg3p, pars.S), (0,1)), eachslice(q_0_SH; dims=4)) #maybe use q_0 SH?
+            rhs = reduce((acc, x) -> cat(acc, x; dims=4), rhs_list)
+            rhs_grid = QG3.transform_grid(rhs, pars.shgg)
+            residual = ∂u_∂t .- rhs_grid
+            if bc 
+                return mean(abs2, residual) + bc_term
+            else
+                return mean(abs2, residual)
+            end
+        elseif size(q_pred, 3) == 6
+            if bc
+                bc_term = mean(abs2, q_pred[:,end,:,:] .- q_pred[:,1,:,:])
+            end
+            q_pred_denorm = ESM_PINO.denormalize_data(q_pred, μ, σ)
+            if state_eq 
+                ψ_pred_denorm = QG3.transform_grid(QG3.qprimetoψ(pars.qg3p, QG3.transform_SH(permutedims(q_pred_denorm[:,:,1:3,:], (3,1,2,4)), pars.ggsh)), pars.shgg)
+                state_eq_term = mean(abs2, permutedims(ψ_pred_denorm,(2,3,1,4)) .- q_pred_denorm[:,:,4:6,:])
+            end
+            q_0_denorm = ESM_PINO.denormalize_data(q_0, μ, σ)
+
+            ∂q_∂t = (q_pred_denorm .- q_0_denorm)[:,:,1:3,:] ./ pars.dt
+            ∂q_∂t = permutedims(∂q_∂t, (3, 1, 2, 4))
+            q_0_new = q_0_denorm[:,:,1:3,:]
+            q_0_SH = QG3.transform_SH(permutedims(q_0_new, (3, 1, 2, 4)), pars.ggsh)
+            rhs_list = map(x -> QG3.QG3MM_gpu(x, (pars.qg3p, pars.S), (0,1)), eachslice(q_0_SH; dims=4)) #maybe use q_0 SH?
+            rhs = reduce((acc, x) -> cat(acc, x; dims=4), rhs_list)
+            rhs_grid = QG3.transform_grid(rhs, pars.shgg)
+            residual = ∂q_∂t .- rhs_grid
+            return mean(abs2, residual) + (bc ? bc_term : 0f0) + (state_eq ? state_eq_term : 0f0)
+        end
+    end   
 end
-
-
-############################
-# Factory: Loss Composer
-############################
-
 """
     make_QG3_loss(pars::QG3_Physics_Parameters;
                   α=0.5f0,
@@ -235,10 +267,6 @@ function make_QG3_loss(pars::QG3_Physics_Parameters;
     return QG3_loss_function
 end
 
-
-############################
-# Optional: Autoregressive Extension
-############################
 """
     make_autoregressive_loss(QG3_loss::Function; steps::Int, sequential::Bool=true)
 

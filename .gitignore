@@ -9,5 +9,6 @@
 /examples/experiment.jl
 /examples/plotting_tests.jl
 /examples/speedy_experiment.jl
+/examples/ArgParse_test.jl
 /figures
 /data/Manifest.toml

@@ -164,6 +164,7 @@ struct FourierNeuralOperator{T,N} <: Lux.AbstractLuxContainerLayer{(:embedding, 
     lifting::Lux.AbstractLuxLayer
     fno_blocks::Lux.Chain{<:NamedTuple{<:Any,<:Tuple{Vararg{FNO_Block{T,N}}}}}
     projection::Lux.AbstractLuxLayer
+    outer_skip::Bool
 end
 
 function FourierNeuralOperator(;
@@ -178,6 +179,8 @@ function FourierNeuralOperator(;
     projection_channel_ratio::Int=2,
     channel_mlp_expansion::Number=2,
     activation=NNlib.gelu,
+    inner_skip::Bool=true,
+    outer_skip::Bool=true,
     positional_embedding::Bool=true,
     grid_boundaries::Union{Nothing,Vector{Vector{Float32}}}=nothing,
     use_norm::Bool=false,
@@ -228,13 +231,14 @@ function FourierNeuralOperator(;
         [FNO_Block(
             hidden_channels, 
             n_modes; 
-            expansion_factor=channel_mlp_expansion, 
+            expansion_factor=channel_mlp_expansion,
+            skip=inner_skip, 
             activation=activation,
             use_norm=use_norm
         ) for _ in 1:n_layers]... 
     )
     
-    return FourierNeuralOperator{ComplexF32,N}(embedding, lifting, fno_blocks, projection)
+    return FourierNeuralOperator{ComplexF32,N}(embedding, lifting, fno_blocks, projection, outer_skip)
 end
 
 function Lux.initialparameters(rng::AbstractRNG, layer::FourierNeuralOperator{T,N}) where {T,N}
@@ -264,10 +268,13 @@ function Lux.initialstates(rng::AbstractRNG, layer::FourierNeuralOperator{T,N}) 
 end
 
 function (layer::FourierNeuralOperator{T,N})(x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {T,N}
+    residual = x
     x, st_embedding = layer.embedding(x, ps.embedding, st.embedding)
     x, st_lifting = layer.lifting(x, ps.lifting, st.lifting)
     x, st_fno_blocks = layer.fno_blocks(x, ps.fno_blocks, st.fno_blocks)
     x, st_projection = layer.projection(x, ps.projection, st.projection)
-
+    if layer.outer_skip
+        x = x + residual
+    end
     return x, (embedding=st_embedding, lifting=st_lifting, fno_blocks=st_fno_blocks, projection=st_projection)
 end

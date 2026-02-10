@@ -150,7 +150,7 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
         push!(blocks, final_block)
         
         sfno_blocks = Lux.Chain(blocks...)
-        plan = ESM_PINOQG3(ggsh_outer, shgg_outer, ones(Int,1,1,1,1),ones(Int,1,1,1,1), create_remap_plan(corrected_modes-1, size(ggsh_outer.Pw,2)))
+        plan = ESM_PINOQG3(ggsh_outer, shgg_outer, ones(Int,1,1,1,1),ones(Int,1,1,1,1), create_remap_plan(0, size(ggsh_outer.Pw,2)))
     else
         throw(ArgumentError("Invalid positional embedding type. Supported arguments are 'grid', 'gaussian_grid' and 'no_grid'."))
     end
@@ -402,8 +402,6 @@ function (layer::ESM_PINO.SFNO{E, L, B, P, ESM_PINOQG3})(x::AbstractArray, ps::N
     x, st_projection = layer.projection(x, ps.projection, st.projection)
     if layer.outer_skip
         x = x + residual
-    else
-        x = x
     end
     return x, (embedding=st_embedding, lifting=st_lifting, sfno_blocks=st_sfno_blocks, projection=st_projection)
 end
@@ -416,8 +414,6 @@ function Lux.apply(layer::ESM_PINO.SFNO{E, L, B, P, ESM_PINOQG3}, x::AbstractArr
     x, st_projection = layer.projection(x, ps.projection, st.projection)
     if layer.outer_skip
         x = x + residual
-    else
-        x = x
     end
     return x, (embedding=st_embedding, lifting=st_lifting, sfno_blocks=st_sfno_blocks, projection=st_projection)
 end

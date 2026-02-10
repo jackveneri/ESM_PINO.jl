@@ -433,7 +433,7 @@ function analyze_weights(ps, prefix="", indent=0)
     end
 end
 
-function apply_n_times(f, x::AbstractArray, n::Int; m::Int=0, μ=0.0,  σ=1.0, channelwise::Bool=false)
+function apply_n_times(f, x::AbstractArray, n::Int; m::Int=0, μ=0.0, σ=1.0)
     y = x
     snapshots = m > 0 ? Vector{typeof(x)}() : nothing
     save_steps = m > 0 ? round.(Int, range(1, n; length=m)) : Int[]

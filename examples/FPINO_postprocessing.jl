@@ -37,7 +37,7 @@ function to_array(data, dev)
 end
 
 # Main execution
-model_string = "FNO"
+model_string = "FPINO"
 gpu = true
 GC.gc()
 CUDA.reclaim()
