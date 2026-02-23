@@ -32,6 +32,7 @@ include("ESM_PINOQG3Ext/losses.jl")
 include("ESM_PINOQG3Ext/utilities.jl")
 include("ESM_PINOQG3Ext/SphericalConvTypeSpec.jl")
 include("ESM_PINOQG3Ext/SFNO_components.jl")
+include("ESM_PINOQG3Ext/SpectralPositionEmbedding.jl")
 include("ESM_PINOQG3Ext/SFNO.jl")
 include("ESM_PINOQG3Ext/metrics.jl")
 

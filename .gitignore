@@ -10,5 +10,6 @@
 /examples/plotting_tests.jl
 /examples/speedy_experiment.jl
 /examples/ArgParse_test.jl
+/examples/SH_plots.jl
 /figures
 /data/Manifest.toml

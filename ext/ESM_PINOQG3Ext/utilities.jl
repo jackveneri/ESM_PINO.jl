@@ -38,6 +38,15 @@ function transfer_SFNO_model(model::ESM_PINO.SFNO, qg3ppars::QG3ModelParameters;
     projection_layers = model.projection.layers
     last_layer_index = length(projection_layers)  # or fieldcount(typeof(projection_layers))
     out_channels = projection_layers[last_layer_index].out_chs
+    if typeof(model.embedding) <: SpectralPositionEmbedding
+        positional_embedding = "spectral"
+    elseif typeof(model.embedding) <: ESM_PINO.GridEmbedding
+        positional_embedding = "grid"
+    elseif typeof(model.embedding)  <: ESM_PINO.GaussianGridEmbedding2D
+        positional_embedding = "gaussian_grid"
+    else
+        positional_embedding = "no_grid"
+    end
     superres_model = SFNO(qg3ppars,
         batch_size = batch_size,
         modes = model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.modes,
@@ -49,7 +58,7 @@ function transfer_SFNO_model(model::ESM_PINO.SFNO, qg3ppars::QG3ModelParameters;
         projection_channel_ratio=model.projection_channel_ratio,
         channel_mlp_expansion=model.sfno_blocks.layers.layer_1.channel_mlp.expansion_factor,
         activation = model.sfno_blocks.layers.layer_1.activation,
-        positional_embedding = model.embedding == NoOpLayer() ? "no_grid" : "grid",
+        positional_embedding = positional_embedding,
         gpu = isnothing(gpu) ?
             Base.unwrap_unionall(typeof(model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh)).parameters[end]
         : gpu ,
@@ -150,7 +159,7 @@ end
 Fast array remapping using a precomputed plan.
 """
 function remap_array_components_fast(arr::AbstractArray{T,4}, plan::RemapPlan) where T
-    @assert size(arr, 3) == plan.input_size_3 "Input size mismatch"
+    @assert size(arr, 3) == plan.input_size_3 "Input size mismatch: expected $(plan.input_size_3), got $(size(arr, 3))"
     
     i, j, _, k = size(arr)
     
@@ -184,7 +193,7 @@ end
 
 # More efficient version avoiding intermediate allocations
 function remap_array_components_fast_v2(arr::AbstractArray{T,4}, plan::RemapPlan) where T
-    @assert size(arr, 3) == plan.input_size_3 "Input size mismatch"
+    @assert size(arr, 3) == plan.input_size_3 "Input size mismatch: expected $(plan.input_size_3), got $(size(arr, 3))"
     
     i, j, _, k = size(arr)
     out = similar(arr, i, j, plan.output_size_3, k)

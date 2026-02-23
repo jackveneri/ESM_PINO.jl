@@ -53,10 +53,10 @@ trained_model = ESM_PINOQG3.train_model(q_0_train, q_evolved_train, q_0_val, q_e
                                             use_physics=false,
                                             geometric=true,
                                             spectral=false,
-                                            positional_embedding = "no_grid",
+                                            positional_embedding ="spectral",
                                             gpu=gpu,
                                             lr_0=2e-3,
-                                            β=0.015f0 
+                                            β=0.0f0 
                                             )
 trained_model_architecture = trained_model.model
 trained_model_ps = trained_model.ps

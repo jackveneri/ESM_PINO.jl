@@ -53,7 +53,7 @@ sol = cat(solu, solψ; dims=3)
 
 sol = ESM_PINO.normalize_data(sol, μ, σ)
 N_test = 100
-model_channels = model.lifting.layers.layer_1.in_chs
+model_channels = typeof(model.embedding) <: Lux.NoOpLayer ? model.lifting.layers.layer_1.in_chs : model.lifting.layers.layer_1.in_chs - 2
 shgg2 = QG3.SHtoGaussianGridTransform(qg3ppars, model_channels, N_batch=N_test)
 ggsh2 = QG3.GaussianGridtoSHTransform(qg3ppars, model_channels, N_batch=N_test)
 ps, st = transfer_data(ps, dev), transfer_data(st, dev)
