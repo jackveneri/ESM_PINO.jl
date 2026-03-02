@@ -13,3 +13,5 @@
 /examples/SH_plots.jl
 /figures
 /data/Manifest.toml
+/data/burgers_results.jld2
+/data/burgers_results_test.jld2

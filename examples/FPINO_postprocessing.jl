@@ -47,6 +47,7 @@ dev = get_device(gpu)
 const ESM_PINOQG3 = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext)
 
 qg3ppars, qg3p, S, solψ, solu = ESM_PINOQG3.load_precomputed_data(root=root, N_sims=5000, res=res, gpu=gpu)
+velocity = ESM_PINOQG3.prepare_velocity_ML_data(solψ, qg3p, gpu=gpu)
 sol = cat(solu, solψ; dims=3)
 
 #ESM_PINO.analyze_weights(ps)
@@ -180,7 +181,7 @@ for ilvl in 1:3
     plot_times = 1:size(q_stable_plot_pred, 4)
     lons = range(-180,180,qg3ppars.N_lons)    # Longitude 
     lats = rad2deg.(qg3ppars.lats)    # Latitude 
-    clims = (-1.1 * maximum(abs.(q_stable_plot_pred[ilvl,:,:,:])), 1.1 * maximum(abs.(q_plot_pred[ilvl,:,:,:])))
+    clims = (-1.1 * maximum(abs.(q_stable_plot_pred[ilvl,:,:,:])), 1.1 * maximum(abs.(q_stable_plot_pred[ilvl,:,:,:])))
     fig_pred = Figure()
     ax_pred = GeoAxis(fig_pred[1, 1], dest="+proj=moll")
     data_obs_pred = Observable(permutedims(q_stable_plot_pred[ilvl,:,:,1],(2,1)))

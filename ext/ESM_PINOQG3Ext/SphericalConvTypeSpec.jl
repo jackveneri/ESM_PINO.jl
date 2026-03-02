@@ -284,7 +284,7 @@ function ESM_PINO.SphericalConv(
     else
         QG3.gpuoff()
     end
-    new_pars = qg3pars_constructor_helper(corrected_modes, pars)
+    new_pars = qg3pars_constructor_helper(corrected_modes, pars, NF=T)
     ggsh = QG3.GaussianGridtoSHTransform(new_pars, hidden_channels; N_batch=batch_size)
     shgg = QG3.SHtoGaussianGridTransform(new_pars, hidden_channels; N_batch=batch_size)
     i, m, n, b = hidden_channels, size(ggsh.Pw, 2), 2*corrected_modes-1, batch_size
@@ -483,7 +483,7 @@ function (layer::ESM_PINO.SphericalConv{ESM_PINOQG3})(x::AbstractArray{T,4}, ps:
                 x_p = ein"ilmb,oil->olmb"(x_extracted, ps.weight)
             end
             
-            # Her no need to pad (?)
+            # Here no need to pad (?)
             x_pad = reorderQG3_indexes_4d(x_p, layer.plan.inverse_linear_indices)
             #x_res_pad = inverse_reorderQG3_indexes_4d(x_extracted)
             #x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes-1), 0, 0))
@@ -554,7 +554,7 @@ function Lux.apply(layer::ESM_PINO.SphericalConv{ESM_PINOQG3}, x::AbstractArray{
                 x_p = ein"ilmb,oil->olmb"(x_extracted, ps.weight)
             end
             
-            # Her no need to pad (?)
+            # Here no need to pad (?)
             x_pad = reorderQG3_indexes_4d(x_p, layer.plan.inverse_linear_indices)
             #x_res_pad = inverse_reorderQG3_indexes_4d(x_extracted)
             #x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes-1), 0, 0))

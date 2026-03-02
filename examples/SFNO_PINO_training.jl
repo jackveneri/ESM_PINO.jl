@@ -27,7 +27,8 @@ else
     QG3.gpuoff()
 end
 
-qg3ppars, qg3p, S, solψ, solu = ESM_PINOQG3.load_precomputed_data(root=root, N_sims=N_sims+(2*autoregressive_steps*dt)+N_val, res="t21", gpu=gpu)
+qg3ppars, qg3p, S, solψ, solu = ESM_PINOQG3.load_precomputed_data(root=root, N_sims=N_sims+(2*autoregressive_steps*dt)+N_val, res=res, gpu=gpu)
+velocity = ESM_PINOQG3.prepare_velocity_ML_data(solψ, qg3p, gpu=gpu)
 sol = cat(solu, solψ; dims=3)
 q_0_train, q_evolved_train, q_0_val, q_evolved_val, μ, σ, _ = ESM_PINOQG3.preprocess_data(sol, normalize=true, to_gpu=gpu, dt=dt, channelwise=true, train_fraction=N_sims/(N_sims+N_val)) 
 

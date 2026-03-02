@@ -1791,3 +1791,19 @@ function preprocess_data(solu::AbstractArray;
         return q_0, q_evolved, μ, σ, normalization_params 
     end
 end
+
+function prepare_velocity_ML_data(solψ::AbstractArray{T,4}, qg3p::QG3Model; gpu=true) where T
+    psi = QG3.transform_SH_data(Array(permutedims(solψ,(3,1,2,4))), qg3p)
+    velocity_u = map(time -> QG3.u(psi[:,:,:,time], qg3p), 1:size(psi,4))
+    velocity_u = cat(velocity_u..., dims=4)
+    velocity_u = permutedims(velocity_u, (2,3,1,4))
+
+    velocity_v = map(time -> QG3.v(psi[:,:,:,time], qg3p), 1:size(psi,4))
+    velocity_v = cat(velocity_v..., dims=4)
+    velocity_v = permutedims(velocity_v, (2,3,1,4))
+    velocity = cat(velocity_u, velocity_v; dims=3)
+    if gpu
+        velocity = QG3.togpu(velocity)
+    end    
+    return velocity
+end

@@ -37,12 +37,15 @@ function ESM_PINO.SFNO(pars::QG3.QG3ModelParameters;
         throw(ArgumentError("n_layers must be at least 2"))
     end
     # Setup positional embedding
-    if positional_embedding in ["grid", "no_grid", "gaussian_grid", "spectral"]
+    if positional_embedding in ["grid", "no_grid", "gaussian_grid", "spectral", "lsh"]
         if positional_embedding == "grid"
             embedding = GridEmbedding()
             in_channels += 2
         elseif positional_embedding == "gaussian_grid"
             embedding = GaussianGridEmbedding2D()
+            in_channels += 2
+        elseif positional_embedding == "lsh"
+            embedding = LSHEmbedding(pars)
             in_channels += 2
         elseif positional_embedding == "spectral"
             shgg = QG3.SHtoGaussianGridTransform(pars, hidden_channels, N_batch=1)
@@ -260,12 +263,15 @@ function ESM_PINO.SFNO(
         throw(ArgumentError("n_layers must be at least 2"))
     end
     # Setup positional embedding
-    if positional_embedding in ["grid", "no_grid", "gaussian_grid", "spectral"]
+    if positional_embedding in ["grid", "no_grid", "gaussian_grid", "spectral", "lsh"]
         if positional_embedding == "grid"
             embedding = GridEmbedding()
             in_channels += 2
         elseif positional_embedding == "gaussian_grid"
             embedding = GaussianGridEmbedding2D()
+            in_channels += 2
+        elseif positional_embedding == "lsh"
+            embedding = LSHEmbedding(ggsh) #placeholder
             in_channels += 2
         elseif positional_embedding == "spectral"
             embedding = SpectralPositionEmbedding(shgg, hidden_channels) #placeholder
@@ -399,7 +405,7 @@ function Lux.initialstates(rng::Random.AbstractRNG, layer::ESM_PINO.SFNO{E, L, B
     )
 end
 
-function (layer::ESM_PINO.SFNO{E, L, B, P, ESM_PINOQG3})(x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {E <: Union{Lux.NoOpLayer, ESM_PINO.GridEmbedding, ESM_PINO.GaussianGridEmbedding2D}, L, B, P} 
+function (layer::ESM_PINO.SFNO{E, L, B, P, ESM_PINOQG3})(x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {E <: Union{Lux.NoOpLayer, ESM_PINO.GridEmbedding, ESM_PINO.GaussianGridEmbedding2D, ESM_PINOQG3Ext.LSHEmbedding}, L, B, P} 
     residual = x
     x, st_embedding = layer.embedding(x, ps.embedding, st.embedding)
     x, st_lifting = layer.lifting(x, ps.lifting, st.lifting)
@@ -411,7 +417,7 @@ function (layer::ESM_PINO.SFNO{E, L, B, P, ESM_PINOQG3})(x::AbstractArray, ps::N
     end
     return x, (embedding=st_embedding, lifting=st_lifting, sfno_blocks=st_sfno_blocks, projection=st_projection)
 end
-function Lux.apply(layer::ESM_PINO.SFNO{E, L, B, P, ESM_PINOQG3}, x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {E <: Union{Lux.NoOpLayer, ESM_PINO.GridEmbedding, ESM_PINO.GaussianGridEmbedding2D}, L, B, P} 
+function Lux.apply(layer::ESM_PINO.SFNO{E, L, B, P, ESM_PINOQG3}, x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {E <: Union{Lux.NoOpLayer, ESM_PINO.GridEmbedding, ESM_PINO.GaussianGridEmbedding2D, ESM_PINOQG3Ext.LSHEmbedding}, L, B, P} 
     residual = x
     x, st_embedding = layer.embedding(x, ps.embedding, st.embedding)
     x, st_lifting = layer.lifting(x, ps.lifting, st.lifting)

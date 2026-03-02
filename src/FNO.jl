@@ -159,8 +159,8 @@ y3, _ = layer3d(x3,
 @show size(y3)   # expect (32, 32, 32, 1, 4)
 ```
 """
-struct FourierNeuralOperator{T,N} <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :fno_blocks, :projection)}
-    embedding::Union{Lux.NoOpLayer, GridEmbedding}
+struct FourierNeuralOperator{T,N,E} <: Lux.AbstractLuxContainerLayer{(:embedding, :lifting, :fno_blocks, :projection)}
+    embedding::E
     lifting::Lux.AbstractLuxLayer
     fno_blocks::Lux.Chain{<:NamedTuple{<:Any,<:Tuple{Vararg{FNO_Block{T,N}}}}}
     projection::Lux.AbstractLuxLayer
@@ -238,10 +238,10 @@ function FourierNeuralOperator(;
         ) for _ in 1:n_layers]... 
     )
     
-    return FourierNeuralOperator{ComplexF32,N}(embedding, lifting, fno_blocks, projection, outer_skip)
+    return FourierNeuralOperator{ComplexF32,N,typeof(embedding)}(embedding, lifting, fno_blocks, projection, outer_skip)
 end
 
-function Lux.initialparameters(rng::AbstractRNG, layer::FourierNeuralOperator{T,N}) where {T,N}
+function Lux.initialparameters(rng::AbstractRNG, layer::FourierNeuralOperator{T,N,E}) where {T,N,E}
     ps_embedding = Lux.initialparameters(rng, layer.embedding)
     ps_lifting = Lux.initialparameters(rng, layer.lifting)
     ps_fno_blocks = Lux.initialparameters(rng, layer.fno_blocks)
@@ -254,7 +254,7 @@ function Lux.initialparameters(rng::AbstractRNG, layer::FourierNeuralOperator{T,
     )
 end
 
-function Lux.initialstates(rng::AbstractRNG, layer::FourierNeuralOperator{T,N}) where {T,N}
+function Lux.initialstates(rng::AbstractRNG, layer::FourierNeuralOperator{T,N,E}) where {T,N,E}
     st_embedding = Lux.initialstates(rng, layer.embedding)
     st_lifting = Lux.initialstates(rng, layer.lifting)
     st_fno_blocks = Lux.initialstates(rng, layer.fno_blocks)
@@ -267,7 +267,7 @@ function Lux.initialstates(rng::AbstractRNG, layer::FourierNeuralOperator{T,N}) 
     )
 end
 
-function (layer::FourierNeuralOperator{T,N})(x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {T,N}
+function (layer::FourierNeuralOperator{T,N,E})(x::AbstractArray, ps::NamedTuple, st::NamedTuple) where {T,N,E}
     residual = x
     x, st_embedding = layer.embedding(x, ps.embedding, st.embedding)
     x, st_lifting = layer.lifting(x, ps.lifting, st.lifting)

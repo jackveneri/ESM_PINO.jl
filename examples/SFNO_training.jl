@@ -28,8 +28,9 @@ else
 end
 
 qg3ppars, qg3p, S, solψ, solu = ESM_PINOQG3.load_precomputed_data(root=root, N_sims=N_sims+(2*autoregressive_steps*dt)+N_val, res=res, gpu=gpu)
+velocity = ESM_PINOQG3.prepare_velocity_ML_data(solψ, qg3p, gpu=gpu)
 sol = cat(solu, solψ; dims=3)
-q_0_train, q_evolved_train, q_0_val, q_evolved_val, μ, σ, _ = ESM_PINOQG3.preprocess_data(sol, normalize=true, to_gpu=gpu, dt=dt, channelwise=true, train_fraction=N_sims/(N_sims+N_val)) 
+q_0_train, q_evolved_train, q_0_val, q_evolved_val, μ, σ, _ = ESM_PINOQG3.preprocess_data(velocity, normalize=true, to_gpu=gpu, dt=dt, channelwise=true, train_fraction=N_sims/(N_sims+N_val)) 
 
 autoregressive_target = ESM_PINOQG3.stack_time_steps(q_evolved_train, autoregressive_steps, dt=dt, N_sims=N_sims, gpu=gpu)
 autoregressive_target_val = ESM_PINOQG3.stack_time_steps(q_evolved_val, autoregressive_steps, dt=dt, N_sims=N_val, gpu=gpu)

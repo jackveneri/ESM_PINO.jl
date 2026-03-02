@@ -29,12 +29,14 @@ end
 export ESM_PINOQG3
 include("ESM_PINOQG3Ext/gaussian_grid_utils.jl")
 include("ESM_PINOQG3Ext/losses.jl")
+include("ESM_PINOQG3Ext/LSHEmbedding.jl")
 include("ESM_PINOQG3Ext/utilities.jl")
 include("ESM_PINOQG3Ext/SphericalConvTypeSpec.jl")
 include("ESM_PINOQG3Ext/SFNO_components.jl")
 include("ESM_PINOQG3Ext/SpectralPositionEmbedding.jl")
 include("ESM_PINOQG3Ext/SFNO.jl")
 include("ESM_PINOQG3Ext/metrics.jl")
+include("ESM_PINOQG3Ext/FNO.jl")
 
 export qg3pars_constructor_helper
 end
