@@ -8,23 +8,31 @@ using LuxTestUtils  # For gradient testing
     
     # Test configuration constants
     in_channels = 3
-    out_channels = 3
+    out_channels = 2
+    inner_mixing=true
+    use_norm=true
     modes = (16,16)
     batch_size = 10
     input_dims = (64, 64, in_channels, batch_size)
 
     @testset "Initialization" begin
         # Test that layer constructs properly
-        layer = ESM_PINO.SpectralKernel(in_channels, out_channels, modes)
+        layer = ESM_PINO.SpectralKernel(in_channels, out_channels, modes; inner_mixing=inner_mixing, use_norm=use_norm)
         
         # Test parameter initialization
         ps, st = Lux.setup(rng, layer)
         
         # Verify parameters exist and have correct shapes
-        @test haskey(ps, :spatial)
         @test haskey(ps, :spectral)
         @test size(ps.spectral.weight) == (modes..., out_channels, in_channels)
-        @test size(ps.spatial.weight) == (1, 1, in_channels, out_channels)
+        if inner_mixing
+            @test haskey(ps, :spatial)
+            @test size(ps.spatial.weight) == (1, 1, in_channels, out_channels)
+        end
+        if use_norm
+            @test haskey(ps, :norm)
+            @test size(ps.norm.scale) == (out_channels, )
+        end
         # Verify state is properly initialized 
         @test st != nothing
     end

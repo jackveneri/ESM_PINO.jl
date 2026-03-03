@@ -15,7 +15,7 @@ end
 
 # Constructor for your specific field types
 function SFNO(
-    embedding::Union{Lux.NoOpLayer, GridEmbedding2D},
+    embedding::Union{Lux.NoOpLayer, GridEmbedding, GaussianGridEmbedding2D},
     lifting::Lux.AbstractLuxLayer,
     sfno_blocks::Lux.Chain,
     projection::Lux.AbstractLuxLayer,

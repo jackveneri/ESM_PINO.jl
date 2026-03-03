@@ -1,3 +1,9 @@
+root = dirname(@__DIR__)
+dir = @__DIR__
+using Pkg
+Pkg.activate(dir)   
+Pkg.instantiate()
+
 using ESM_PINO, Printf, CairoMakie, JLD2, OnlineStats, Lux, Random, Statistics, MLUtils, Optimisers, ParameterSchedulers
 
 const gdev = gpu_device()
@@ -6,7 +12,7 @@ const cdev = cpu_device()
 # Example usage
 
 #Load and prepare data (generated with burgers_simulation_FD_schemes.jl)
-@load "burgers_results.jld2" results ts x
+@load string(root, "/data/burgers_results.jld2") results ts x
 sim1_results = permutedims(results, (2, 1, 3))
 
 # Extract raw data
@@ -39,7 +45,7 @@ x_normalized, x_μ, x_σ = ESM_PINO.normalize_data(u_t1)
 target_normalized, target_μ, target_σ = ESM_PINO.normalize_data(target)
 
 #also generate a test set using burgers_simulation_FD_schemes.jl
-@load "burgers_results_test.jld2" results ts x
+@load string(root, "/data/burgers_results_test.jld2") results ts x
 sim2_results = permutedims(results, (2, 1, 3))
 
 # Extract raw data
@@ -86,7 +92,7 @@ function train_model(x, target; seed::Int=0,
     n_layers=4, 
     hidden_channels=hidden_channels, 
     n_modes=(15,), 
-    positional_embedding="grid1D"
+    positional_embedding=true
     )
     ps, st = Lux.setup(rng, fno) |> gdev
     dataloader = DataLoader((x, target); batchsize=1, shuffle=false) |> gdev

@@ -12,7 +12,6 @@ using LuxTestUtils  # For gradient testing
     batch_size = 10
     input_dims = (64, 64, channels, batch_size)
     hidden_channels = Int(channels * expansion_factor)
-    input_dims = (64, 64, channels, batch_size)
 
     @testset "Initialization" begin
         # Test that layer constructs properly

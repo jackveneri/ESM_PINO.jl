@@ -96,8 +96,11 @@ function reorderQG3_indexes_4d(A::AbstractArray{T,4}) where T
                         (row_indices - 1) * i +
                         (col_indices - 1) * (i * m) +
                         (b_indices - 1) * (i * m * n)
-    
+    println(typeof(linear_indices))
     return reshape(A[linear_indices], i, m, n, b)
+end
+function reorderQG3_indexes_4d(A::AbstractArray{T,4}, linear_indices::Array{Int,4}) where T
+    return reshape(A[linear_indices], size(A))
 end
 
 """
@@ -170,7 +173,76 @@ function ESM_PINO.SphericalConv(
     if modes > corrected_modes
         @warn "modes ($modes) exceeds safe_modes ($(safe_modes)). Setting modes = $(safe_modes)."
     end
-    plan = ESM_PINOQG3(ggsh, shgg)
+    batch_size = typeof(ggsh).parameters[end] ? ggsh.FT_4d.plan.input_size[4] : ggsh.FT_4d.plan.sz[4] 
+    N_lat_ggsh = size(ggsh.Pw, 1)
+    N_lat_shgg = shgg.output_size[1]
+    pars_ggsh = qg3pars_constructor_helper(corrected_modes, N_lat_ggsh)
+    pars_shgg = qg3pars_constructor_helper(corrected_modes, N_lat_shgg)
+    ggsh = QG3.GaussianGridtoSHTransform(pars_ggsh, hidden_channels; N_batch=batch_size)
+    shgg = QG3.SHtoGaussianGridTransform(pars_shgg, hidden_channels; N_batch=batch_size)
+    
+    i, m, n, b = hidden_channels, size(ggsh.Pw, 2), 2*corrected_modes-1, batch_size
+    
+    # Compute shifts for each column
+    shifts = (1:n) .÷ 2
+    
+    # Create source row indices
+    # Shape: (m, n) - for each position (row, col), which source row to read from
+    rows = 1:m
+    source_rows = mod1.(rows .- shifts', m)
+    
+    # Reshape for broadcasting over 4D array
+    # Need shape (1, m, n, 1) to broadcast over dimensions 1 and 4
+    source_rows_4d = reshape(source_rows, 1, m, n, 1)
+    
+    # Create index arrays for all dimensions
+    i_idx = reshape(1:i, i, 1, 1, 1)
+    n_idx = reshape(1:n, 1, 1, n, 1)
+    b_idx = reshape(1:b, 1, 1, 1, b)
+    
+    # Broadcast gather indices - ensure everything stays Int
+    i_indices = Int.(i_idx .+ zeros(Int, 1, m, n, b))
+    row_indices = Int.(source_rows_4d .+ zeros(Int, i, 1, 1, b))
+    col_indices = Int.(n_idx .+ zeros(Int, i, m, 1, b))
+    b_indices = Int.(b_idx .+ zeros(Int, i, m, n, 1))
+    
+    # Create linear indices for the entire 4D array
+    # Linear index formula: i + (row-1)*I + (col-1)*I*M + (b-1)*I*M*N
+    linear_indices = @. i_indices + 
+                        (row_indices - 1) * i +
+                        (col_indices - 1) * (i * m) +
+                        (b_indices - 1) * (i * m * n)
+    
+    i, m, n, b = hidden_channels, corrected_modes, 2*corrected_modes-1, batch_size
+
+    # Compute shifts for each column (inverse direction)
+    shifts = (1:n) .÷ 2
+    
+    # Create source row indices (shifted in opposite direction)
+    rows = 1:m
+    source_rows = mod1.(rows .+ shifts', m)
+    
+    # Reshape for broadcasting
+    source_rows_4d = reshape(source_rows, 1, m, n, 1)
+    
+    # Create index arrays
+    i_idx = reshape(1:i, i, 1, 1, 1)
+    n_idx = reshape(1:n, 1, 1, n, 1)
+    b_idx = reshape(1:b, 1, 1, 1, b)
+    
+    # Broadcast gather indices - ensure everything stays Int
+    i_indices = Int.(i_idx .+ zeros(Int, 1, m, n, b))
+    row_indices = Int.(source_rows_4d .+ zeros(Int, i, 1, 1, b))
+    col_indices = Int.(n_idx .+ zeros(Int, i, m, 1, b))
+    b_indices = Int.(b_idx .+ zeros(Int, i, m, n, 1))
+    
+    # Create linear indices
+    inverse_linear_indices = @. i_indices + 
+                        (row_indices - 1) * i +
+                        (col_indices - 1) * (i * m) +
+                        (b_indices - 1) * (i * m * n)
+    remap_plan = create_remap_plan(corrected_modes-1, size(shgg.P,3) ÷ 2)
+    plan = ESM_PINOQG3(ggsh, shgg, linear_indices, inverse_linear_indices, remap_plan)
     gpu_columns = [1]
     for k in 1:corrected_modes-1
         push!(gpu_columns, [ggsh.FT_4d.i_imag+k+1, k+1]...)
@@ -197,23 +269,86 @@ function ESM_PINO.SphericalConv(
     # Correct modes upfront
     if gpu
         corrected_modes = min(modes, pars.N_lats)
+        if modes != corrected_modes
+        @warn "modes ($modes) exceeds N_lats ($(pars.N_lats)). Setting modes = $(pars.N_lats)."
+        end
     else
         corrected_modes = min(modes, pars.L)
+        if modes != corrected_modes
+        @warn "modes ($modes) exceeds maximum L ($(pars.L)). Setting modes = $(pars.L)."
+        end
     end
-    if modes != corrected_modes
-        @warn "modes ($modes) exceeds N_lats ($(pars.N_lats)). Setting modes = $(pars.N_lats)."
-    end
-    
     # GPU setup
     if gpu
         QG3.gpuon()
     else
         QG3.gpuoff()
     end
+    new_pars = qg3pars_constructor_helper(corrected_modes, pars, NF=T)
+    ggsh = QG3.GaussianGridtoSHTransform(new_pars, hidden_channels; N_batch=batch_size)
+    shgg = QG3.SHtoGaussianGridTransform(new_pars, hidden_channels; N_batch=batch_size)
+    i, m, n, b = hidden_channels, size(ggsh.Pw, 2), 2*corrected_modes-1, batch_size
+    
+    # Compute shifts for each column
+    shifts = (1:n) .÷ 2
+    
+    # Create source row indices
+    # Shape: (m, n) - for each position (row, col), which source row to read from
+    rows = 1:m
+    source_rows = mod1.(rows .- shifts', m)
+    
+    # Reshape for broadcasting over 4D array
+    # Need shape (1, m, n, 1) to broadcast over dimensions 1 and 4
+    source_rows_4d = reshape(source_rows, 1, m, n, 1)
+    
+    # Create index arrays for all dimensions
+    i_idx = reshape(1:i, i, 1, 1, 1)
+    n_idx = reshape(1:n, 1, 1, n, 1)
+    b_idx = reshape(1:b, 1, 1, 1, b)
+    
+    # Broadcast gather indices - ensure everything stays Int
+    i_indices = Int.(i_idx .+ zeros(Int, 1, m, n, b))
+    row_indices = Int.(source_rows_4d .+ zeros(Int, i, 1, 1, b))
+    col_indices = Int.(n_idx .+ zeros(Int, i, m, 1, b))
+    b_indices = Int.(b_idx .+ zeros(Int, i, m, n, 1))
+    
+    # Create linear indices for the entire 4D array
+    # Linear index formula: i + (row-1)*I + (col-1)*I*M + (b-1)*I*M*N
+    linear_indices = @. i_indices + 
+                        (row_indices - 1) * i +
+                        (col_indices - 1) * (i * m) +
+                        (b_indices - 1) * (i * m * n)
+    
+    i, m, n, b = hidden_channels, corrected_modes, 2*corrected_modes-1, batch_size
 
-    ggsh = QG3.GaussianGridtoSHTransform(pars, hidden_channels; N_batch=batch_size)
-    shgg = QG3.SHtoGaussianGridTransform(pars, hidden_channels; N_batch=batch_size)
-    plan = ESM_PINOQG3(ggsh, shgg)
+    # Compute shifts for each column (inverse direction)
+    shifts = (1:n) .÷ 2
+    
+    # Create source row indices (shifted in opposite direction)
+    rows = 1:m
+    source_rows = mod1.(rows .+ shifts', m)
+    
+    # Reshape for broadcasting
+    source_rows_4d = reshape(source_rows, 1, m, n, 1)
+    
+    # Create index arrays
+    i_idx = reshape(1:i, i, 1, 1, 1)
+    n_idx = reshape(1:n, 1, 1, n, 1)
+    b_idx = reshape(1:b, 1, 1, 1, b)
+    
+    # Broadcast gather indices - ensure everything stays Int
+    i_indices = Int.(i_idx .+ zeros(Int, 1, m, n, b))
+    row_indices = Int.(source_rows_4d .+ zeros(Int, i, 1, 1, b))
+    col_indices = Int.(n_idx .+ zeros(Int, i, m, 1, b))
+    b_indices = Int.(b_idx .+ zeros(Int, i, m, n, 1))
+    
+    # Create linear indices
+    inverse_linear_indices = @. i_indices + 
+                        (row_indices - 1) * i +
+                        (col_indices - 1) * (i * m) +
+                        (b_indices - 1) * (i * m * n)
+    remap_plan = create_remap_plan(corrected_modes-1, size(shgg.P,3) ÷ 2)
+    plan = ESM_PINOQG3(ggsh, shgg, linear_indices, inverse_linear_indices, remap_plan)
     
     gpu_columns = [1]
     for k in 1:corrected_modes-1
@@ -305,7 +440,7 @@ function (layer::ESM_PINO.SphericalConv{ESM_PINOQG3})(x::AbstractArray{T,4}, ps:
         if typeof(layer.plan.ggsh).parameters[end] == true 
             # GPU path
             x_extracted_cols = x_tr[:, :, layer.gpu_cols, :]
-            x_extracted = reorderQG3_indexes_4d(x_extracted_cols)
+            x_extracted = reorderQG3_indexes_4d(x_extracted_cols, layer.plan.linerar_indices)
             x_extracted = x_extracted[:,1:layer.modes,:,:]
             # Apply operator based on type
             if layer.operator_type == :diagonal
@@ -322,14 +457,20 @@ function (layer::ESM_PINO.SphericalConv{ESM_PINOQG3})(x::AbstractArray{T,4}, ps:
             end
             
             # Remap and pad
-            x_p = inverse_reorderQG3_indexes_4d(x_p)
-            x_p = remap_array_components(x_p, layer.modes-1, size(layer.plan.shgg.P,3)÷2)
-            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, 0, 0, 0))    
+            x_p = reorderQG3_indexes_4d(x_p, layer.plan.inverse_linear_indices)
+            x_p = remap_array_components_fast_v2(x_p, layer.plan.remap_plan)
+            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, 0, 0, 0))
+            x_res = reorderQG3_indexes_4d(x_extracted, layer.plan.inverse_linear_indices)
+            x_res = remap_array_components_fast_v2(x_res, layer.plan.remap_plan)
+            x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, 0, 0, 0))
+            #remap back to grid for gpu residual
+            res_out = QG3.transform_grid(x_res_pad, layer.plan.shgg)
+
+                
         else
             # CPU path
-            x_extracted = reorderQG3_indexes_4d(x_tr)
-            x_extracted = x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
-            
+            x_extracted = reorderQG3_indexes_4d(x_tr, layer.plan.linerar_indices)
+            #x_extracted = x_extracted[:, 1:layer.modes, 1:2*layer.modes-1, :]
             # Apply operator based on type
             if layer.operator_type == :diagonal
                 # einsum: "bilm,oilm->bolm"
@@ -342,14 +483,17 @@ function (layer::ESM_PINO.SphericalConv{ESM_PINOQG3})(x::AbstractArray{T,4}, ps:
                 x_p = ein"ilmb,oil->olmb"(x_extracted, ps.weight)
             end
             
-            # Pad
-            x_p = inverse_reorderQG3_indexes_4d(x_p)
-            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes-1), 0, 0))   
+            # Here no need to pad (?)
+            x_pad = reorderQG3_indexes_4d(x_p, layer.plan.inverse_linear_indices)
+            #x_res_pad = inverse_reorderQG3_indexes_4d(x_extracted)
+            #x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes-1), 0, 0))
+            #x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes-1), 0, 0))   
+            #remap back to grid for cpu residual
+            res_out = QG3.transform_grid(x_tr, layer.plan.shgg)
         end
         
         # Transform back to grid
         x_out = QG3.transform_grid(x_pad, layer.plan.shgg)
-        res_out = QG3.transform_grid(x_tr, layer.plan.shgg)
         
         # Permute back to [lat, lon, channels, batch]
         x_out_perm = permutedims(x_out, (2, 3, 1, 4))
@@ -367,7 +511,7 @@ function Lux.apply(layer::ESM_PINO.SphericalConv{ESM_PINOQG3}, x::AbstractArray{
         if typeof(layer.plan.ggsh).parameters[end] == true 
             # GPU path
             x_extracted_cols = x_tr[:, :, layer.gpu_cols, :]
-            x_extracted = reorderQG3_indexes_4d(x_extracted_cols)
+            x_extracted = reorderQG3_indexes_4d(x_extracted_cols,layer.plan.linerar_indices)
             x_extracted = x_extracted[:,1:layer.modes,:,:]
             # Apply operator based on type
             if layer.operator_type == :diagonal
@@ -384,14 +528,20 @@ function Lux.apply(layer::ESM_PINO.SphericalConv{ESM_PINOQG3}, x::AbstractArray{
             end
             
             # Remap and pad
-            x_p = inverse_reorderQG3_indexes_4d(x_p)
-            x_p = remap_array_components(x_p, layer.modes-1, size(layer.plan.shgg.P,3)÷2)
-            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, 0, 0, 0))    
+            x_p = reorderQG3_indexes_4d(x_p, layer.plan.inverse_linear_indices)
+            x_p = remap_array_components_fast_v2(x_p, layer.plan.remap_plan)
+            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, 0, 0, 0))
+            x_res = reorderQG3_indexes_4d(x_extracted, layer.plan.inverse_linear_indices)
+            x_res = remap_array_components_fast_v2(x_res, layer.plan.remap_plan)
+            x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, 0, 0, 0))
+            #remap back to grid for gpu residual
+            res_out = QG3.transform_grid(x_res_pad, layer.plan.shgg)
+
+                
         else
             # CPU path
-            x_extracted = reorderQG3_indexes_4d(x_tr)
-            x_extracted = x_tr[:, 1:layer.modes, 1:2*layer.modes-1, :]
-            
+            x_extracted = reorderQG3_indexes_4d(x_tr, layer.plan.linerar_indices)
+            #x_extracted = x_extracted[:, 1:layer.modes, 1:2*layer.modes-1, :]
             # Apply operator based on type
             if layer.operator_type == :diagonal
                 # einsum: "bilm,oilm->bolm"
@@ -404,14 +554,17 @@ function Lux.apply(layer::ESM_PINO.SphericalConv{ESM_PINOQG3}, x::AbstractArray{
                 x_p = ein"ilmb,oil->olmb"(x_extracted, ps.weight)
             end
             
-            # Pad
-            x_p = inverse_reorderQG3_indexes_4d(x_p)
-            x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes-1), 0, 0))   
+            # Here no need to pad (?)
+            x_pad = reorderQG3_indexes_4d(x_p, layer.plan.inverse_linear_indices)
+            #x_res_pad = inverse_reorderQG3_indexes_4d(x_extracted)
+            #x_pad = NNlib.pad_zeros(x_p, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes-1), 0, 0))
+            #x_res_pad = NNlib.pad_zeros(x_res, (0, 0, 0, size(layer.plan.shgg.P, 2) - layer.modes, 0, size(layer.plan.shgg.P, 3) - (2*layer.modes-1), 0, 0))   
+            #remap back to grid for cpu residual
+            res_out = QG3.transform_grid(x_tr, layer.plan.shgg)
         end
         
         # Transform back to grid
         x_out = QG3.transform_grid(x_pad, layer.plan.shgg)
-        res_out = QG3.transform_grid(x_tr, layer.plan.shgg)
         
         # Permute back to [lat, lon, channels, batch]
         x_out_perm = permutedims(x_out, (2, 3, 1, 4))

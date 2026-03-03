@@ -136,18 +136,20 @@ function create_physics_loss(params::SpectralPhysicsLossParameters)
         u_t1 = u_t1 .* params.x_σ .+ params.x_μ
         if ndims(u_t1) == 3
             ∂u_∂t = (u_t2 .- u_t1) ./ params.t_step_length
-            boundary_residual = u_t2[1:1,:,:] .- u_t2[end:end,:,:]
+            #boundary_residual = u_t2[1:1,:,:] .- u_t2[end:end,:,:]
             ∂f_∂x, ∂u_∂xx = spatial_derivative(u_t2, params)
+            boundary_residual = 0
         else 
             forward_diff_first = (u_t2[:, 2:2, :, :] .- u_t2[:, 1:1, :, :]) ./ params.t_step_length
             forward_diff_last = (u_t2[:, end:end, :, :] .- u_t2[:, end-1:end-1, :, :]) ./ params.t_step_length
             central_diff = (u_t2[:, 3:end, :, :] .- u_t2[:, 1:end-2, :, :]) ./ (2 * params.t_step_length)
             ∂u_∂t = cat(forward_diff_first, central_diff, forward_diff_last; dims=2)
-            boundary_residual = u_t2[1:1,:,:,:] .- u_t2[end:end,:,:,:]
+            #boundary_residual = u_t2[1:1,:,:,:] .- u_t2[end:end,:,:,:]
             u_t2_permute =  permutedims(u_t2, (1, 4, 3, 2)) 
             ∂f_∂x, ∂u_∂xx = spatial_derivatives_batch(u_t2, params)
             ∂f_∂x = permutedims(∂f_∂x, (1, 4, 3, 2))
             ∂u_∂xx = permutedims(∂u_∂xx, (1, 4, 3, 2))
+            boundary_residual = 0
         end
         return mean(abs2, ∂u_∂t .+ ∂f_∂x .- (params.ν .* ∂u_∂xx)) + mean(abs2, boundary_residual)
     end
@@ -188,13 +190,15 @@ function create_physics_loss(params::FDPhysicsLossParameters)
         u_t1 = u_t1 .* params.x_σ .+ params.x_μ
         if ndims(u_t1) == 3
             ∂u_∂t = (u_t2 .- u_t1) ./ params.t_step_length
-            boundary_residual = u_t2[1:1,:,:] .- u_t2[end:end,:,:]
+            #boundary_residual = u_t2[1:1,:,:] .- u_t2[end:end,:,:]
+            boundary_residual = 0
         else 
             forward_diff_first = (u_t2[:, 2:2, :, :] .- u_t2[:, 1:1, :, :]) ./ params.t_step_length
             forward_diff_last = (u_t2[:, end:end, :, :] .- u_t2[:, end-1:end-1, :, :]) ./ params.t_step_length
             central_diff = (u_t2[:, 3:end, :, :] .- u_t2[:, 1:end-2, :, :]) ./ (2 * params.t_step_length)
             ∂u_∂t = cat(forward_diff_first, central_diff, forward_diff_last; dims=2)
-            boundary_residual = u_t2[1:1,:,:,:] .- u_t2[end:end,:,:,:]
+            #boundary_residual = u_t2[1:1,:,:,:] .- u_t2[end:end,:,:,:]
+            boundary_residual = 0
         end
         ∂f_∂x, ∂u_∂xx = spatial_derivatives_batch(u_t2, params)
         return mean(abs2, ∂u_∂t .+ ∂f_∂x .- (params.ν .* ∂u_∂xx)) + mean(abs2, boundary_residual)

@@ -1,9 +1,10 @@
 root = dirname(@__DIR__)
+dir = @__DIR__
 using Pkg
-Pkg.activate(root)
+Pkg.activate(dir)
 Pkg.instantiate()
 
-using ESM_PINO, Printf, CairoMakie, JLD2, OnlineStats, Lux, Random, Statistics, MLUtils, Optimisers, ParameterSchedulers
+using ESM_PINO, Printf, GLMakie, JLD2, OnlineStats, Lux, Random, Statistics, MLUtils, Optimisers, ParameterSchedulers
 
 const gdev = gpu_device()
 const cdev = cpu_device()
@@ -11,7 +12,7 @@ const cdev = cpu_device()
 # Example usage
 
 #Load and prepare data (generated with burgers_simulation_FD_schemes.jl)
-@load string(root,"/burgers_results.jld2") results ts x
+@load string(root,"/data/burgers_results.jld2") results ts x
 sim1_results = permutedims(results, (2, 1, 3))
 
 # Extract raw data
@@ -20,7 +21,7 @@ const t_min = ts[1]
 t_index = 10
 t_res = 32
 Δt = 4
-Δx = 4
+Δx = 8
 u_t1 = Float32.(reshape(sim1_results[1:Δx:end, t_index:Δt:t_index + (t_res-1)*Δt, :], Int(size(sim1_results)[1]/Δx), t_res, 1, size(sim1_results)[3]))
 target = Float32.(reshape(sim1_results[1:Δx:end, t_index + t_res * Δt:Δt:t_index   + Δt* (2 * t_res - 1), :], Int(size(sim1_results)[1]/Δx), t_res, 1, size(sim1_results)[3]))
 #noise_level = 0.1
@@ -45,7 +46,7 @@ x_normalized, x_μ, x_σ = ESM_PINO.normalize_data(u_t1)
 target_normalized, target_μ, target_σ = ESM_PINO.normalize_data(target)
 
 #also generate a test set using burgers_simulation_FD_schemes.jl
-@load string(root,"/burgers_results_test.jld2") results ts x
+@load string(root,"/data/burgers_results_test.jld2") results ts x
 sim2_results = permutedims(results, (2, 1, 3))
 
 # Extract raw data
@@ -59,9 +60,9 @@ x_test_normalized = (x_test .- x_μ)./ x_σ
 fno = FourierNeuralOperator(
     in_channels=1,
     out_channels=1,
-    hidden_channels=64,
+    hidden_channels=32,
     n_modes=(15,15), 
-    positional_embedding="grid"
+    positional_embedding=true
 )
 
 rng = Random.default_rng()
@@ -84,7 +85,7 @@ function train_model(x, target; seed::Int=0,
     n_layers=4, 
     hidden_channels=hidden_channels, 
     n_modes=(15,15), 
-    positional_embedding="grid"
+    positional_embedding=true
     )
     ps, st = Lux.setup(rng, fno) |> gdev
     dataloader = DataLoader((x, target); batchsize=1, shuffle=false) |> gdev
@@ -231,8 +232,8 @@ for (par, title) in LOSS_TITLES
         hm6 = heatmap!(ax6, x_plot, t_plot, best_error; colormap=:dense)
         Colorbar(fig2[3, 2], hm6; label=" percentual error", vertical=true)
     end
-    save(string(root,"/$(title)_worst.svg"), fig1)
-    save(string(root,"/$(title)_best.svg"), fig2)
+    save(string(root,"/$(title)_worst.png"), fig1)
+    save(string(root,"/$(title)_best.png"), fig2)
     loss_results[title] = (
         copy(loss),          # Full loss vector
         result,              # Mean loss
@@ -254,7 +255,7 @@ begin
     comparison_fig = Figure(size=(1600, 1000))  # Adjusted for vertical layout
     
     # First plot (top row)
-    ax1 = CairoMakie.Axis(comparison_fig[1, 1], 
+    ax1 = GLMakie.Axis(comparison_fig[1, 1], 
         title="Comparative Error Across Simulations",
         xlabel="Simulation Index", 
         ylabel=L"L_2 Error",
@@ -262,7 +263,7 @@ begin
         )
     
     # Second plot (bottom row)
-    ax2 = CairoMakie.Axis(comparison_fig[2, 1], 
+    ax2 = GLMakie.Axis(comparison_fig[2, 1], 
         title="Error Distribution Statistics",
         xticks=(1:length(loss_results), collect(keys(loss_results))),
         xlabel="Training Type",
@@ -286,7 +287,7 @@ begin
     end
 
     # Boxplot (same as before)
-    CairoMakie.boxplot!(ax2, categories, vals,
+    GLMakie.boxplot!(ax2, categories, vals,
         color=color_indices, colormap=colormap,
         show_notch=false, whiskerwidth=0.4,
         strokecolor=:black, strokewidth=1,
@@ -295,7 +296,7 @@ begin
 
     # Add mean indicators
     for (idx, (title, (loss, mean_loss, _, _))) in enumerate(loss_results)
-        CairoMakie.scatter!(ax2, [idx], [mean(loss)], 
+        GLMakie.scatter!(ax2, [idx], [mean(loss)], 
             marker=:diamond, color=:black, strokecolor=:black, markersize=20)
     end
 
@@ -313,7 +314,7 @@ begin
 
     # White thinner line on top
     median_line = lines!(ax2, [0.0, 0.0], [0.0, 0.0], color=:white, linewidth=2, visible=false)
-    mean_marker = CairoMakie.scatter!(ax2, [0], [0], marker=:diamond, color=:black, strokecolor=:black, visible=false)
+    mean_marker = GLMakie.scatter!(ax2, [0], [0], marker=:diamond, color=:black, strokecolor=:black, visible=false)
 
     # Add statistics legend to second plot
     
@@ -333,7 +334,7 @@ begin
     rowsize!(comparison_fig.layout, 1, Relative(0.4))  # Top plot height
     rowsize!(comparison_fig.layout, 2, Relative(0.6))  # Bottom plot height
     rowgap!(comparison_fig.layout, 15)  # Space between rows
-    save(string(root,"/comparison_fig.svg"), comparison_fig)    
+    save(string(root,"/comparison_fig.png"), comparison_fig)    
 end
 
 

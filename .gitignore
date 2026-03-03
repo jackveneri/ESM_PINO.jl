@@ -9,5 +9,9 @@
 /examples/experiment.jl
 /examples/plotting_tests.jl
 /examples/speedy_experiment.jl
+/examples/ArgParse_test.jl
+/examples/SH_plots.jl
 /figures
 /data/Manifest.toml
+/data/burgers_results.jld2
+/data/burgers_results_test.jld2

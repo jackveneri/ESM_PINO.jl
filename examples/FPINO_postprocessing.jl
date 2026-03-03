@@ -7,9 +7,8 @@ using ESM_PINO, JLD2, GLMakie, Printf, Statistics, QG3, NetCDF, Dates, CFTime, L
 
 include(string(dir,"/plotting_utils.jl"))
 # Determine device type and setup
-function get_device(model)
+function get_device(gpu)
     # Check if model parameters are on GPU
-    gpu = typeof(model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh).parameters[end]
     if gpu
         CUDA.functional() || error("Model is GPU-based but CUDA is not available")
         QG3.gpuon()
@@ -38,29 +37,29 @@ function to_array(data, dev)
 end
 
 # Main execution
-model_string = "SFPINO"
+model_string = "FPINO"
+gpu = true
 GC.gc()
 CUDA.reclaim()
 
-@load string(root,"/models/",model_string,"_results.jld2") model ps st dt N_sims μ σ res pars
-dev = get_device(model)
+@load string(root,"/models/",model_string,"_results.jld2") model ps st dt N_sims μ σ res
+dev = get_device(gpu)
 const ESM_PINOQG3 = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext)
 
-qg3ppars, qg3p, S, solψ, solu = ESM_PINOQG3.load_precomputed_data(root=root, N_sims=5000, res=res, gpu=typeof(model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh).parameters[end])
+qg3ppars, qg3p, S, solψ, solu = ESM_PINOQG3.load_precomputed_data(root=root, N_sims=5000, res=res, gpu=gpu)
 velocity = ESM_PINOQG3.prepare_velocity_ML_data(solψ, qg3p, gpu=gpu)
 sol = cat(solu, solψ; dims=3)
 
-ESM_PINO.analyze_weights(ps)
+#ESM_PINO.analyze_weights(ps)
 
 sol = ESM_PINO.normalize_data(sol, μ, σ)
 N_test = 100
-model_channels = model.lifting.layers.layer_1.in_chs
+model_channels = typeof(model.embedding) <: Lux.NoOpLayer ? model.lifting.layers.layer_1.in_chs : model.lifting.layers.layer_1.in_chs - 2
 shgg2 = QG3.SHtoGaussianGridTransform(qg3ppars, model_channels, N_batch=N_test)
 ggsh2 = QG3.GaussianGridtoSHTransform(qg3ppars, model_channels, N_batch=N_test)
-test_model = ESM_PINOQG3.transfer_SFNO_model(model, qg3ppars, batch_size=N_test)
 ps, st = transfer_data(ps, dev), transfer_data(st, dev)
 
-trained_u = Lux.testmode(StatefulLuxLayer{true}(test_model, ps, st))
+trained_u = Lux.testmode(StatefulLuxLayer{true}(model, ps, st))
 #you can call this on sol or sol[:,:,1:3,:] depending on e.g. model channels
 function prepare_test_data(sol::AbstractArray{T,4}; N_sims=3000, N_val=300, dt=1, normalize=false, noise_level=0, dev=cpu_device(), μ=0, σ=1) where T
     sol_lt = sol[:,:,:, 1:N_sims]
@@ -82,9 +81,6 @@ one_step_L2_rel_err = mean(abs2, to_array(q_pred, dev) .- to_array(q_test_evolve
 println("One-step Relative L2 Error: ", one_step_L2_rel_err)
 
 q_test_rollout = q_test_array[:, :, :, 2:2]
-
-test_model_autoreg = ESM_PINOQG3.transfer_SFNO_model(model, qg3ppars, batch_size=1)
-trained_u_autoreg = Lux.testmode(StatefulLuxLayer{true}(test_model_autoreg, ps, st))
 
 function prepare_plot_data(q_pred::AbstractArray{T,4}, qg3p::QG3Model, ggsh2::QG3.GaussianGridtoSHTransform, shgg2::QG3.SHtoGaussianGridTransform; dev=cpu_device()) where T
     @assert size(q_pred,3) == size(q_test_evolved,3)
@@ -177,7 +173,7 @@ time_scale_adjust = Int(round(long_rollout_t_steps / (snapshots-1)))
 ggsh3 = QG3.GaussianGridtoSHTransform(qg3ppars, model_channels, N_batch=snapshots)
 shgg3 = QG3.SHtoGaussianGridTransform(qg3ppars, model_channels, N_batch=snapshots)
 
-q_stable = ESM_PINO.apply_n_times(trained_u_autoreg, q_test_rollout, long_rollout_iter; m=snapshots, μ=μ, σ=σ)
+q_stable = ESM_PINO.apply_n_times(trained_u, q_test_rollout, long_rollout_iter; m=snapshots, μ=μ, σ=σ)
 q_stable = cat(q_stable..., dims=4)
 q_stable_plot_pred, sf_stable_plot_pred = prepare_plot_data(q_stable, qg3p, ggsh3, shgg3; dev=dev)
 
@@ -202,9 +198,6 @@ end
 
 acc_horizon = 30
 acc = Vector{Vector{Float64}}(undef,3)
-println(typeof(q_stable))
-println(typeof(q_test_evolved))
-println(typeof(q_test_ltm))
 for ilvl in 1:3
     acc[ilvl] = ESM_PINOQG3.compute_ACC(q_stable[:,:,ilvl,1:acc_horizon], q_test_evolved[:,:,ilvl,dt:dt:dt*acc_horizon], qg3ppars, q_test_ltm[:,:,ilvl])
 end
@@ -222,10 +215,7 @@ save(string(root, "/figures/", model_string, "_kinetic_energy_stable.png"), plot
 function plot_power_spectrum(q_pred, q_test_evolved, qg3ppars, dt; rollout_length = 10)
     fig = Figure()
     ax = Axis(fig[1, 1], yscale = log10)
-    if typeof(q_pred) <: CUDA.CuArray
-        q_pred = to_array(q_pred, dev)
-        q_test_evolved = to_array(q_test_evolved, dev)
-    end
+    
     q_pred_sh = QG3.transform_SH(permutedims(q_pred,(3,1,2,4)), QG3.GaussianGridtoSHTransform(qg3ppars, size(q_pred,3), N_batch=size(q_pred,4)))
     q_test_evolved_sh = QG3.transform_SH(permutedims(q_test_evolved,(3,1,2,4)), QG3.GaussianGridtoSHTransform(qg3ppars, size(q_test_evolved,3), N_batch=size(q_test_evolved,4)))
     # Plot the angular power spectrum
@@ -242,12 +232,12 @@ function plot_power_spectrum(q_pred, q_test_evolved, qg3ppars, dt; rollout_lengt
     axislegend(ax, position=:rb)
     return fig
 end
-fig = plot_power_spectrum(q_pred, q_test_evolved, qg3ppars, dt; rollout_length = 10)
+fig = plot_power_spectrum(Array(q_pred), Array(q_test_evolved), qg3ppars, dt; rollout_length = 10)
 save(string(root, "/figures/",model_string ,"_power_spectrum.png"), fig)
 
-if dev == gpu_device()
+if gpu
     QG3.gpuon()
-else 
+else
     QG3.gpuoff()
 end
 autoregressive_pars = ESM_PINOQG3.QG3_Physics_Parameters(
@@ -258,12 +248,12 @@ autoregressive_pars = ESM_PINOQG3.QG3_Physics_Parameters(
             QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=1),
             μ,
             σ,
-            gpu= dev == gpu_device()
+            gpu=gpu
         )
 
-u_autoreg = Lux.StatefulLuxLayer{true}(test_model_autoreg, ps, st)
+u_autoreg = Lux.StatefulLuxLayer{true}(model, ps, st)
 
 for i in 1:size(q_stable,4)
-    a = ESM_PINOQG3.physics_informed_loss_QG3(u_autoreg, q_stable[:,:,:,i:i], autoregressive_pars, bc=true, state_eq=true)
+    a = ESM_PINOQG3.physics_informed_loss_QG3(u_autoreg, q_stable[:,:,:,i:i], autoregressive_pars, bc=false, state_eq=true)
     println("Physics loss at step ", i, ": ", a)
 end

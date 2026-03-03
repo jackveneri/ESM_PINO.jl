@@ -3,7 +3,7 @@ using Pkg
 Pkg.activate(dirname(@__DIR__))
 Pkg.instantiate()
 
-using ESM_PINO, FFTW, Plots, Random, JLD2, OrdinaryDiffEq, SparseArrays
+using ESM_PINO, FFTW, Random, JLD2, OrdinaryDiffEq, SparseArrays
 
 function sample_initial_condition(N::Int; L::Float64=1.0)            
     dx = L / N         # Spatial resolution
@@ -62,15 +62,17 @@ prob = ODEProblem(burgers!, u0, tspan, 0.001)
 @time sol = solve(prob, Rodas5P(), dt=0.0001, reltol=1e-6, abstol=1e-8)
 
 ts = tspan[1]:0.1:tspan[2]
+#=
+using Plots
 anim = Plots.@animate for t ∈ ts
     plot(x,sol(t),ylims=(minimum(u0),maximum(u0)),label="t=$t")
 end
 
 gif(anim, "burgers.gif",fps=20)
-
+=#
 
 # Define simulation parameters
-N_sim = 100
+N_sim = 1000
 N = 512          
 tspan = (0.0, 3.0)
 N_t = 1024
@@ -97,4 +99,4 @@ for sim in 1:N_sim
 end
 
 # Save the 3D array to disk for later use, for example using JLD2:
-@save string(root,"/burgers_results_test.jld2") results ts x
+@save string(root,"/data/burgers_results.jld2") results ts x

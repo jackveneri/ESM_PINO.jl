@@ -1,222 +1,81 @@
 root = dirname(@__DIR__)
+dir = @__DIR__
 using Pkg
-Pkg.activate(root)
+Pkg.activate(dir)
 Pkg.instantiate()
+using ESM_PINO, Printf, CUDA, OnlineStats, Lux, LuxCUDA, Random, Statistics, MLUtils, Optimisers, ParameterSchedulers, QG3, JLD2
 
-using ESM_PINO, Printf, NetCDF, OnlineStats, QG3, CFTime, Dates, Lux, Optimisers, Random, Statistics, CUDA, MLUtils, ParameterSchedulers, JLD2
-
-function train_model(x::AbstractArray, target::AbstractArray; seed::Int=0,
-    maxiters::Int=3000, hidden_channels::Int=32, parameters::Union{Nothing, ESM_PINO.QG3_Physics_Parameters}=nothing)
-    
-    rng = Random.default_rng(seed)
-    
-    fno = FourierNeuralOperator(
-        in_channels=3, 
-        out_channels=3, 
-        n_layers=4, 
-        hidden_channels=hidden_channels, 
-        n_modes=(15, 15),  # 2D Fourier modes (lat, lon)
-        positional_embedding="grid"
-    )
-    
-    ps, st = Lux.setup(rng, fno) |> gdev
-    
-    # Rest of training setup remains similar
-    batchsize = 200
-    dataloader = DataLoader((x, target); batchsize=batchsize, shuffle=true) |> gdev
-    opt = Optimisers.ADAM(0.001f0)
-    lr = i -> Exp(0.001f0, 0.999f0).(i)
-    train_state = Training.TrainState(fno, ps, st, opt)
-    if !isnothing(parameters)
-        par_train = ESM_PINO.QG3_Physics_Parameters(
-                parameters.dt,
-                parameters.qg3p,
-                parameters.S,
-                QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=batchsize),
-                QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=batchsize),
-                parameters.μ,
-                parameters.σ
-        )
-    else
-        par_train = nothing
-    end
-    physics_loss = ESM_PINO.create_QG3_physics_loss(par_train)
-    loss_function = ESM_PINO.select_QG3_loss_function(physics_loss)
-    
-    total_loss_tracker, physics_loss_tracker, data_loss_tracker = ntuple(_ -> Lag(Float32, 32), 3)
-    iter = 1
-    for (x, target_data) in Iterators.cycle(dataloader)
-        Optimisers.adjust!(train_state, lr(iter))
-        _, loss, stats, train_state = Training.single_train_step!(AutoZygote(), loss_function, (x, target_data), train_state)
-        
-        fit!(total_loss_tracker, Float32(loss))
-        fit!(physics_loss_tracker, Float32(stats.physics_loss))
-        fit!(data_loss_tracker, Float32(stats.data_loss))
-
-        mean_loss = mean(OnlineStats.value(total_loss_tracker))
-        mean_physics_loss = mean(OnlineStats.value(physics_loss_tracker))
-        mean_data_loss = mean(OnlineStats.value(data_loss_tracker))
-
-        isnan(loss) && throw(ArgumentError("NaN Loss Detected"))
-        
-        if iter % 5 == 0 || iter == maxiters
-            @printf "Iteration: [%5d / %5d] \t Loss: %.9f (%.9f) \t Physics Loss: %.9f \
-                 (%.9f) \t Data Loss: %.9f (%.9f)\n" iter maxiters loss mean_loss stats.physics_loss mean_physics_loss stats.data_loss mean_data_loss
-            GC.gc()
-        end
-        
-        iter += 1
-        
-        if iter > maxiters
-            break
-        end
-    end
-    return StatefulLuxLayer{true}(fno, train_state.parameters, train_state.states), loss_function
-end
-
-
+const ESM_PINOQG3 = Base.get_extension(ESM_PINO, :ESM_PINOQG3Ext)
 const gdev = gpu_device()
 const cdev = cpu_device()
 
+dt = 1 #QG3.p.time_unit
+maxiters = 300
+hidden_channels = 32
+batch_size = 4
+num_examples = num_valid = 256
+N_sims = 3000
+N_val = 300
+gpu = true
+modes = (32,32)
+autoregressive_steps = 2
+res = "t21"
 
-@load string(root, "/data/t21-precomputed-p.jld2") qg3ppars
-qg3ppars = qg3ppars
-qg3p = CUDA.@allowscalar QG3Model(qg3ppars)
-@load string(root, "/data/t21-precomputed-S.jld2") S
-S = CuArray(S)
-# initial conditions for streamfunction and vorticity
-N_sims = 1000
-@load string(root,"/data/solq.jld2") solu
-solu = CuArray(cat(solu...,dims=4))
-shgg = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=size(solu,4))
-solu = QG3.transform_grid(solu, shgg)
-solu = permutedims(solu,(2,3,1,4))
-solu,  μ, σ = ESM_PINO.normalize_data(solu)
-q_0 = solu[:,:,:,1:N_sims]
-q_0 = CuArray(ESM_PINO.add_noise(Array(q_0)))
-q_evolved = solu[:,:,:,2:N_sims+1]
-q_evolved = CuArray(ESM_PINO.add_noise(Array(q_evolved)))
-shgg2 = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=N_sims)
-ggsh2 = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=N_sims)
+if gpu
+    QG3.gpuon()
+else
+    QG3.gpuoff()
+end
 
-dt = 1 #G3.p.time_unit
-seed = 0
-maxiters = 1000
-hidden_channels = 64
-rng = Random.default_rng(seed)
-ggsh_train = QG3.GaussianGridtoSHTransform(qg3ppars, hidden_channels, N_batch=N_sims)
-shgg_train = QG3.SHtoGaussianGridTransform(qg3ppars, hidden_channels, N_batch=N_sims)
-ggsh_loss = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=N_sims)
-shgg_loss = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=N_sims)    
-    
-fno = FourierNeuralOperator(
-    in_channels=3, 
-    out_channels=3, 
-    n_layers=4, 
-    hidden_channels=hidden_channels, 
-    n_modes=(15, 15),  # 2D Fourier modes (lat, lon)
-    positional_embedding="grid"
-)
+qg3ppars, qg3p, S, solψ, solu = ESM_PINOQG3.load_precomputed_data(root=root, N_sims=N_sims+(2*autoregressive_steps*dt)+N_val, res=res, gpu=gpu)
+velocity = ESM_PINOQG3.prepare_velocity_ML_data(solψ, qg3p, gpu=gpu)
+sol = cat(solu, solψ; dims=3)
+q_0_train, q_evolved_train, q_0_val, q_evolved_val, μ, σ, _ = ESM_PINOQG3.preprocess_data(sol, normalize=true, to_gpu=gpu, dt=dt, channelwise=true, train_fraction=N_sims/(N_sims+N_val)) 
 
+autoregressive_target = ESM_PINOQG3.stack_time_steps(q_evolved_train, autoregressive_steps, dt=dt, N_sims=N_sims, gpu=gpu)
+autoregressive_target_val = ESM_PINOQG3.stack_time_steps(q_evolved_val, autoregressive_steps, dt=dt, N_sims=N_val, gpu=gpu)
 
-ps, st = Lux.setup(rng, fno) |> gdev
-q_0 = q_0 |> gdev
+ggsh_loss = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=batch_size)
+shgg_loss = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=batch_size)  
 
-q_swag = fno(q_0, ps, st)[1]
+pars = ESM_PINOQG3.QG3_Physics_Parameters(dt, qg3p, S, ggsh_loss, shgg_loss, μ, σ, gpu=gpu)
 
-par = ESM_PINO.QG3_Physics_Parameters(dt, qg3p, S, ggsh_loss, shgg_loss,  μ, σ)
+trained_model = ESM_PINOQG3.train_model(q_0_train, q_evolved_train, q_0_val, q_evolved_val, 
+                                            nepochs=maxiters,
+                                            modes=modes, 
+                                            hidden_channels=hidden_channels, 
+                                            parameters=pars,
+                                            batchsize=batch_size,
+                                            use_norm=true,
+                                            inner_skip=true,
+                                            outer_skip=true,
+                                            use_physics=false,
+                                            geometric=true,
+                                            spectral=false,
+                                            positional_embedding = true,
+                                            gpu=gpu,
+                                            lr_0=2e-3,
+                                            β=0.015f0 
+                                            )
+trained_model_architecture = trained_model.model
+trained_model_ps = trained_model.ps
+trained_model_st = trained_model.st
 
-PI_loss = ESM_PINO.create_QG3_physics_loss(par)
-loss = ESM_PINO.select_QG3_loss_function(PI_loss)
-
-loss(fno, ps, st, (q_0, q_evolved))
-#using Zygote
-#Zygote.gradient(ps -> loss(fno, ps,st,(q_0,q_evolved))[1], ps)
-
-
-trained_model, loss_function = train_model(q_0, q_evolved; seed=0, maxiters=maxiters, hidden_channels=hidden_channels, parameters=nothing)
-
-trained_u = Lux.testmode(StatefulLuxLayer{true}(trained_model.model, cdev(trained_model.ps), cdev(trained_model.st)))
-
-N_test = 100
-shgg2 = QG3.SHtoGaussianGridTransform(qg3ppars, N_batch=N_test)
-ggsh2 = QG3.GaussianGridtoSHTransform(qg3ppars, N_batch=N_test)
-q_test = solu[:,:,:,N_sims+1:N_sims+N_test]
-q_test = CuArray(ESM_PINO.add_noise(Array(q_test)))
-q_test_evolved = (solu[:,:,:,N_sims+2:N_sims+N_test+1] .* σ .+ μ)
-
-q_test_array = Array(Float32.(q_test))
 GC.gc()
-q_pred = trained_u(q_test_array)
-q_pred = (q_pred .* σ .+ μ) |> gdev
-@printf "Relative L2 Error = %.5f \n"  (mean(abs2, q_pred .- q_test_evolved) / mean(abs2, q_test_evolved))
-q_pred_sh = QG3.transform_SH(permutedims(q_pred,(3,1,2,4)), ggsh2)
-q_test_evolved_sh = QG3.transform_SH(permutedims(q_test_evolved,(3,1,2,4)), ggsh2)
+CUDA.reclaim()
 
-sf_plot_pred = transform_grid(qprimetoψ(qg3p, q_pred_sh), shgg2)
-sf_plot_evolved = transform_grid(qprimetoψ(qg3p, q_test_evolved_sh), shgg2)
+fine_tuned_model = ESM_PINOQG3.fine_tuning(q_0_train[:,:,:,1:size(autoregressive_target,4)], autoregressive_target, q_0_val[:,:,:,1:size(autoregressive_target_val,4)], autoregressive_target_val, trained_model_architecture, trained_model_ps, trained_model_st, 
+                                            parameters=pars, 
+                                            use_physics=false,
+                                            geometric=true,
+                                            n_steps=autoregressive_steps,
+                                            nepochs=10,
+                                            gpu=gpu,
+                                            batchsize=batch_size,
+                                            )
 
-loss = zeros(size(sf_plot_evolved, 1))
-for i in 1:size(sf_plot_evolved, 1)
-    loss[i] = mean(abs2, sf_plot_pred[i,:,:,:] .- sf_plot_evolved[i,:,:,:])
-    scale = mean(abs2, sf_plot_evolved[i,:,:,:])
-    loss[i] = loss[i] / scale * 100
-end
 
-mistake = sf_plot_pred .- sf_plot_evolved
-mistake = Array(mistake)
-sf_plot_pred = Array(sf_plot_pred)
-
-using CairoMakie, JLD2
-
-my_theme = merge(theme_latexfonts(), theme_minimal())
-set_theme!(my_theme, fontsize = 24, font = "Helvetica", color = :black)
-
-for ilvl in 1:3
-    # Set up figure and color limits
-    clims_pred = (-1.1 * maximum(abs, sf_plot_pred[ilvl,:,:,:]), 
-                  1.1 * maximum(abs, sf_plot_pred[ilvl,:,:,:]))
-    clims_err = (-1.1 * maximum(abs, mistake[ilvl,:,:,:]), 
-                 1.1 * maximum(abs, mistake[ilvl,:,:,:]))
-    
-    plot_times = 1:size(sf_plot_pred, 4)
-
-    # Animation for predictions using Observables
-    fig_pred = Figure()
-    ax_pred = Axis(fig_pred[1, 1])
-    data_obs_pred = Observable(permutedims(sf_plot_pred[ilvl,:,:,1],(2,1)))
-    hm_pred = heatmap!(ax_pred, data_obs_pred, colorrange=clims_pred, colormap=:balance)
-    Colorbar(fig_pred[1, 2], hm_pred)
-    
-    CairoMakie.record(fig_pred, joinpath(root, "FNO_prediction_fps20_sf_lvl$(ilvl).gif"), plot_times;
-        framerate=20) do it
-        # Update observable data
-        data_obs_pred[] = permutedims(sf_plot_pred[ilvl,:,:,it],(2,1))
-        ax_pred.title = @sprintf("FNO Prediction at time = %d - %.2f d", it, it * qg3p.p.time_unit)
-    end
-
-    # Animation for errors using Observables
-    fig_err = Figure()
-    ax_err = Axis(fig_err[1, 1])
-    data_obs_err = Observable(permutedims(mistake[ilvl,:,:,1],(2,1)))
-    hm_err = heatmap!(ax_err, data_obs_err, colorrange=clims_err, colormap=:balance)
-    Colorbar(fig_err[1, 2], hm_err)
-    
-    CairoMakie.record(fig_err, joinpath(root, "FNO_error_fps20_sf_lvl$(ilvl).gif"), plot_times;
-        framerate=20) do it
-        # Update observable data
-        data_obs_err[] = permutedims(mistake[ilvl,:,:,it],(2,1))
-        ax_err.title = @sprintf("FNO Error at time = %d - %.2f d", it, it * qg3p.p.time_unit)    
-    end
-
-    # Calculate and print errors
-    error2PINO = mean(abs2, mistake[ilvl,:,:,:])
-    error1PINO = mean(abs, mistake[ilvl,:,:,:])
-    @printf "FNO Percentual Error L2 norm at level %1d: %.9f\n" ilvl loss[ilvl]
-end
-
-# Save results
-ps = cdev(trained_model.ps)
-st = cdev(trained_model.st)
-
-@save joinpath(root, "FNO_results.jld2") sf_plot_pred sf_plot_evolved mistake loss ps st 
+model = fine_tuned_model.model
+ps = cdev(fine_tuned_model.ps)
+st = cdev(fine_tuned_model.st)
+@save joinpath(root, "models/FNO_results.jld2") model ps st dt N_sims μ σ res

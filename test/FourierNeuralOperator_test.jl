@@ -12,7 +12,7 @@ using LuxTestUtils  # For gradient testing
     hidden_channels = 32
     modes = (16,16)
     n_layers = 4
-    positional_embedding = "grid"
+    positional_embedding = true
     batch_size = 10
     input_dims = (64, 64, in_channels, batch_size)
 

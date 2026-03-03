@@ -49,10 +49,10 @@ function compute_QG3_data(qg3p::QG3Model{T}, q_0, S, DT::Number; t_save_length::
     return (t, q)
 end 
 
-S, qg3ppars, ψ_0, q_0 = load_data("T42", GPU=true)
+S, qg3ppars, ψ_0, q_0 = load_data("T21", GPU=true)
 qg3p = @CUDA.allowscalar QG3Model(qg3ppars)
 DT = 1 # time step in QG3 units
-dataset_size = 6000
-t,q = compute_QG3_data(qg3p, q_0, S, DT, t_save_length=DT*(dataset_size-1))
+dataset_size = 7000
+t,q = compute_QG3_data(qg3p, q_0, S, DT, t_save_length=DT*(dataset_size-1), reltol=1e-7)
 
-@save string(dir, "/t42_qg3_data_SH_CPU.jld2") t q DT
+@save string(dir, "/t21_qg3_data_SH_CPU.jld2") t q DT

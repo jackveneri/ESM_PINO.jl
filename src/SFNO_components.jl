@@ -115,6 +115,16 @@ function Base.show(io::IO, layer::GaussianGridEmbedding2D)
     print(io, "GaussianGridEmbedding2D(lat: $lat_range, lon: $lon_range)")
 end
 
+"""
+    meshgrid(x, y)
+
+Generates a 2D meshgrid from vectors `x` and `y`.
+"""
+function meshgrid(x, y)
+    return (repeat(x, 1, length(y)), repeat(y', length(x), 1))
+end
+
+
 function (layer::GaussianGridEmbedding2D)(x::AbstractArray, ps::NamedTuple, st::NamedTuple)
     height, width, channels, batch_size = size(x)
     

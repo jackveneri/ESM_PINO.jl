@@ -64,43 +64,24 @@ function add_noise(data::AbstractArray;
 end
 
 """
-    normalize_data(data; channelwise=false, dims=nothing)
+    normalize_data(data::AbstractArray; channelwise::Bool=false, dims::Union{Nothing, Int, Tuple}=nothing)
 
-Normalize data using mean and standard deviation.
+Normalize data by computing mean and standard deviation.
 
 # Arguments
 - `data::AbstractArray`: Input data to normalize
-
-# Keyword Arguments
-- `channelwise::Bool=false`: If true, normalize each channel independently
-- `dims::Union{Nothing, Int, Tuple}=nothing`: Dimensions to compute statistics over.
-  If `nothing`, behavior depends on `channelwise` and data shape.
+- `channelwise::Bool=false`: If true, compute statistics per channel
+- `dims::Union{Nothing, Int, Tuple}=nothing`: Custom dimensions for computing statistics
 
 # Returns
-- Normalized data, mean(s), std(s)
+- `normalized_data`: Normalized data
+- `μ`: Mean(s) used for normalization
+- `σ`: Standard deviation(s) used for normalization
 
-# Details
-When `channelwise=true`:
-- Attempts to detect 4D format (lat, lon, channel, batch)
-- Computes per-channel statistics across spatial and batch dimensions
-- Returns vectors of means and stds (one per channel)
-
-When `channelwise=false`:
-- Computes global statistics across all dimensions
-- Returns scalar mean and std
-
-# Examples
-```julia
-# Global normalization
-data_norm, μ, σ = normalize_data(data)
-
-# Channel-wise normalization (4D data)
-data = randn(Float32, 48, 96, 5, 32)  # (lat, lon, channels, batch)
-data_norm, μ_vec, σ_vec = normalize_data(data, channelwise=true)
-
-# Custom dimensions
-data_norm, μ, σ = normalize_data(data, dims=(1, 2, 4))  # Over lat, lon, batch
-```
+# Notes
+- Avoids scalar indexing for GPU compatibility
+- For 4D data with channelwise=true: assumes (spatial..., channels, batch) format
+- For 3D data with channelwise=true: assumes (spatial..., channels) format
 """
 function normalize_data(data::AbstractArray; channelwise::Bool=false, dims::Union{Nothing, Int, Tuple}=nothing)
     
@@ -118,7 +99,6 @@ function normalize_data(data::AbstractArray; channelwise::Bool=false, dims::Unio
             
             # Check for near-zero std and warn (on CPU)
             if any(Array(σ) .< eps(eltype(data)))
-                n_channels = size(data, 3)
                 @warn "Some channels have near-zero std. Setting those to 1.0 to avoid division by zero."
             end
             
@@ -128,6 +108,28 @@ function normalize_data(data::AbstractArray; channelwise::Bool=false, dims::Unio
             # Squeeze dimensions for return values
             μ_squeezed = dropdims(μ, dims=(1, 2, 4))
             σ_squeezed = dropdims(σ_safe, dims=(1, 2, 4))
+            
+            return normalized_data, μ_squeezed, σ_squeezed
+            
+        elseif ndims_data == 5
+            # Format: (lat, lon, depth, channel, batch) - for 3D spatial data
+            # Compute statistics over dims (1, 2, 3, 5) for each channel
+            μ = mean(data, dims=(1, 2, 3, 5))  # Shape: (1, 1, 1, n_channels, 1)
+            σ = std(data, dims=(1, 2, 3, 5))   # Shape: (1, 1, 1, n_channels, 1)
+            
+            # Avoid division by zero
+            σ_safe = ifelse.(σ .< eps(eltype(data)), one(eltype(data)), σ)
+            
+            if any(Array(σ) .< eps(eltype(data)))
+                @warn "Some channels have near-zero std. Setting those to 1.0."
+            end
+            
+            # Normalize using broadcasting
+            normalized_data = (data .- μ) ./ σ_safe
+            
+            # Squeeze dimensions
+            μ_squeezed = dropdims(μ, dims=(1, 2, 3, 5))
+            σ_squeezed = dropdims(σ_safe, dims=(1, 2, 3, 5))
             
             return normalized_data, μ_squeezed, σ_squeezed
             
@@ -160,7 +162,7 @@ function normalize_data(data::AbstractArray; channelwise::Bool=false, dims::Unio
                 channelwise = false
             end
         else
-            @warn "Channel-wise normalization requested but data has $ndims_data dimensions. Expected 3 or 4. Falling back to global normalization."
+            @warn "Channel-wise normalization requested but data has $ndims_data dimensions. Expected 3, 4, or 5. Falling back to global normalization."
             channelwise = false
         end
     end
@@ -190,23 +192,52 @@ function normalize_data(data::AbstractArray; channelwise::Bool=false, dims::Unio
         return (data .- μ) ./ σ, μ, σ
     end
 end
-function normalize_data(data::AbstractArray, μ::Union{Real, AbstractArray},σ::Union{Real, AbstractArray})
+
+"""
+    normalize_data(data::AbstractArray, μ::Union{Real, AbstractArray}, σ::Union{Real, AbstractArray})
+
+Normalize data using pre-computed mean and standard deviation.
+
+# Arguments
+- `data::AbstractArray`: Input data to normalize
+- `μ::Union{Real, AbstractArray}`: Mean value(s) for normalization
+- `σ::Union{Real, AbstractArray}`: Standard deviation value(s) for normalization
+
+# Returns
+- Normalized data
+
+# Notes
+- Avoids scalar indexing for GPU compatibility
+- Uses broadcasting for efficient GPU execution
+- Automatically detects if channelwise normalization is needed based on μ and σ types
+"""
+function normalize_data(data::AbstractArray, μ::Union{Real, AbstractArray}, σ::Union{Real, AbstractArray})
     channelwise = !(isa(σ, Real) && isa(μ, Real))
+    
     if channelwise
-        # (lat, lon, channel, batch) format
-        n_channels = size(data, 3)
+        ndims_data = ndims(data)
+        
+        # Determine channel dimension (second-to-last for batched data)
+        channel_dim = ndims_data - 1
+        n_channels = size(data, channel_dim)
         
         if length(μ) != n_channels || length(σ) != n_channels
             throw(ArgumentError("μ and σ length ($(length(μ))) must match number of channels ($n_channels)"))
         end
-        normalized_channels = [
-                (selectdim(data, 3, c).- μ[c]) ./ σ[c] 
-                for c in 1:n_channels
-            ]
-            
-        # Stack along the channel dimension
-        return permutedims(cat(normalized_channels...; dims=4),(1,2,4,3))
+        
+        # Reshape μ and σ to broadcast correctly
+        # Create a shape that is 1 everywhere except the channel dimension
+        broadcast_shape = ntuple(ndims_data) do i
+            i == channel_dim ? n_channels : 1
+        end
+        
+        μ_reshaped = reshape(μ, broadcast_shape)
+        σ_reshaped = reshape(σ, broadcast_shape)
+        
+        # Normalize using broadcasting (GPU-friendly, no scalar indexing)
+        return (data .- μ_reshaped) ./ σ_reshaped
     else
+        # Global normalization with scalars
         return (data .- μ) ./ σ
     end    
 end
@@ -237,8 +268,8 @@ data_original = denormalize_data(data_norm, μ_vec, σ_vec, channelwise=true)
 """
 function denormalize_data(normalized_data::AbstractArray, μ, σ)
     channelwise = !(isa(σ, Real) && isa(μ, Real))
+    
     if channelwise
-        # μ and σ should be vectors
         if !(μ isa AbstractVector && σ isa AbstractVector)
             throw(ArgumentError("For channelwise denormalization, μ and σ must be vectors"))
         end
@@ -246,43 +277,33 @@ function denormalize_data(normalized_data::AbstractArray, μ, σ)
         ndims_data = ndims(normalized_data)
         
         if ndims_data == 4
-            # (lat, lon, channel, batch) format
             n_channels = size(normalized_data, 3)
             
             if length(μ) != n_channels || length(σ) != n_channels
                 throw(ArgumentError("μ and σ length ($(length(μ))) must match number of channels ($n_channels)"))
             end
             
-            # Create denormalized channels as a vector of arrays
-            denormalized_channels = [
-                selectdim(normalized_data, 3, c) .* σ[c] .+ μ[c]
-                for c in 1:n_channels
-            ]
+            μ_reshaped = reshape(μ, 1, 1, :, 1)
+            σ_reshaped = reshape(σ, 1, 1, :, 1)
             
-            # Stack along the channel dimension
-            return permutedims(cat(denormalized_channels...; dims=4),(1,2,4,3))
+            return normalized_data .* σ_reshaped .+ μ_reshaped
             
         elseif ndims_data == 3
-            # (lat, lon, channel) format
             n_channels = size(normalized_data, 3)
             
             if length(μ) != n_channels || length(σ) != n_channels
                 throw(ArgumentError("μ and σ length must match number of channels"))
             end
             
-            # Create denormalized channels as a vector of arrays
-            denormalized_channels = [
-                selectdim(normalized_data, 3, c) .* σ[c] .+ μ[c]
-                for c in 1:n_channels
-            ]
+            μ_reshaped = reshape(μ, 1, 1, :)
+            σ_reshaped = reshape(σ, 1, 1, :)
             
-            # Stack along the channel dimension
-            return cat(denormalized_channels...; dims=3)
+            return normalized_data .* σ_reshaped .+ μ_reshaped
+            
         else
             throw(ArgumentError("Channel-wise denormalization expects 3D or 4D data"))
         end
     else
-        # Global denormalization
         return normalized_data .* σ .+ μ
     end
 end
@@ -412,7 +433,7 @@ function analyze_weights(ps, prefix="", indent=0)
     end
 end
 
-function apply_n_times(f, x::AbstractArray, n::Int; m::Int=0, μ=0.0,  σ=1.0, channelwise::Bool=false)
+function apply_n_times(f, x::AbstractArray, n::Int; m::Int=0, μ=0.0, σ=1.0)
     y = x
     snapshots = m > 0 ? Vector{typeof(x)}() : nothing
     save_steps = m > 0 ? round.(Int, range(1, n; length=m)) : Int[]
