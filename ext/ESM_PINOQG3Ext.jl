@@ -37,6 +37,7 @@ include("ESM_PINOQG3Ext/SpectralPositionEmbedding.jl")
 include("ESM_PINOQG3Ext/SFNO.jl")
 include("ESM_PINOQG3Ext/metrics.jl")
 include("ESM_PINOQG3Ext/FNO.jl")
+include("ESM_PINOQG3Ext/RKSFNO.jl")
 
 export qg3pars_constructor_helper
 end

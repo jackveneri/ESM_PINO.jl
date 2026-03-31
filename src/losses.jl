@@ -1,137 +1,97 @@
-"""
-    spectral_derivative(u::AbstractArray{T}, L::T) where T<:Real
-
-Compute first and second spatial derivatives using FFT spectral methods.
-
-# Arguments
-- `u`: Input array (real-valued), assumed to be on GPU. First dimension is spatial.
-- `L`: Domain length in spatial dimension.
-
-# Returns
-- `du`: First derivative (real array)
-- `d2u`: Second derivative (real array)
-
-# Notes
-- Uses FFT/iFFT with wavenumbers from `compute_k`
-- Assumes periodic boundary conditions
-- Maintains input array type/location (GPU/CPU)
-- Output derivatives are real-valued arrays
-"""
-function spectral_derivative(u::AbstractArray{T}, L::T) where T<:Real
-    k = compute_k(u, L)  # Defined below
-    
-    u_hat = fft(u)
-    # First derivative
-    du_hat = im .* k .* u_hat
-    du = real(ifft(du_hat))
-    # Second derivative
-    d2u_hat = -k.^2 .* u_hat
-    d2u = real(ifft(d2u_hat))
-    
-    return du, d2u
-end
-
-"""
-    compute_k(u::AbstractArray{T}, L::T) where T<:Real
-
-Generate wavenumber array for spectral differentiation.
-
-# Arguments
-- `u`: Template array for dimensions
-- `L`: Domain length
-
-# Returns
-- `k`: Wavenumber array on GPU, reshaped for broadcasting
-# Details
-- Handles even/odd array sizes differently
-- Automatically converts to GPU array
-- Returns array with singleton dimensions for ND broadcasting
-"""
-function compute_k(u::AbstractArray{T}, L::T) where T<:Real
-    N = size(u, 1)  # Assuming first dimension is spatial
-    freq = if iseven(N)
-        [0:(N÷2-1); (-N÷2):-1]
-    else
-        n = (N-1) ÷ 2
-        [0:n; -n:-1]
-    end
-    
-    # Convert to GPU array with matching type
-    freq_gpu = CUDA.cu(T.(freq))
-    k = (2π/L) .* freq_gpu
-    
-    #Add singleton dimensions to match input dimensions
-    return reshape(k, (size(k)..., ntuple(_->1, ndims(u)-1)...))
-end
-
-"""    
-    dealias(u_hat::AbstractArray{Complex{T}}, L::T) where T<:Real
-
-Apply 2/3 dealiasing filter to Fourier coefficients.
-
-# Arguments
-- `u_hat`: Fourier coefficients (complex array)
-- `L`: Domain length (unused in current implementation)
-
-# Returns
-- Filtered coefficients with high frequencies zeroed
-
-# Notes
-- Implements 2/3 rule for anti-aliasing
-- Creates mask directly on GPU
-- Preserves array dimensions for broadcasting
-"""
-function dealias(u_hat::AbstractArray{Complex{T}}, L::T) where T<:Real
-    N = size(u_hat, 1)
-    cutoff = floor(Int, N/3)
-    
-    # Create mask directly on GPU
-    mask = CUDA.cu([i <= cutoff for i in 1:N])
-    
-    #Add singleton dimensions for broadcasting
-    mask = reshape(mask, (size(mask)..., ntuple(_->1, ndims(u_hat)-1)...))
-    return u_hat .* mask
-end
-"""
-    SpectralPhysicsLossParameters(ν::Float64, L::Float64, N_t::Int, t_max::Float64, t_min::Float64, Δt::Float64, x_σ::Float64, x_μ::Float64)
-
-Create a struct to hold parameters for spectral physics loss.
-
-# Fields
-- `ν`: Viscosity (scalar)
-- `L`: Domain size (scalar)
-- `N_t`: Number of time steps (integer)
-- `t_max`: Maximum time (scalar)
-- `t_min`: Minimum time (scalar)
-- `Δt`: Time step size (scalar)
-- `x_σ`: Standard deviation for normalization (scalar)
-- `x_μ`: Mean for normalization (scalar)
-"""
-struct SpectralPhysicsLossParameters
-    ν::Float64
+struct SpectralPhysicsLossParameters{T<:Real, A<:AbstractArray}
+    ν::T
     Δt::Int
-    L::Float64
-    x_σ::Float64
-    x_μ::Float64
-    t_step_length::Float64
+    L::T
+    x_σ::T
+    x_μ::T
+    t_step_length::T
+    ik::A
+    ik2::A
 end
 
-function SpectralPhysicsLossParameters(ν::Float64, L::Float32, t_step_length::Float64)
-    return SpectralPhysicsLossParameters(ν, L, 1, 0, t_step_length)
+function SpectralPhysicsLossParameters(ν::Real, Δt::Int, L::Real, x_σ::Real, x_μ::Real,
+                                        t_step_length::Real, nx::Int;
+                                        T::Type{<:Real}=Float32, device=gpu_device())
+    k_max   = nx ÷ 2
+    k       = T(2π) / T(L) .* T.(0:k_max)
+    ik_cpu  = Complex{T}.(im .* k)
+    ik2_cpu = Complex{T}.(-k .^ 2)
+    ik  = device(ik_cpu)
+    ik2 = device(ik2_cpu)
+    return SpectralPhysicsLossParameters{T, typeof(ik)}(
+        T(ν), Δt, T(L), T(x_σ), T(x_μ), T(t_step_length), ik, ik2)
 end
-"""
-    create_physics_loss()
 
-helper function to create a physics loss function.
+function SpectralPhysicsLossParameters(ν::Real, Δt::Int, L::Real,
+                                        t_step_length::Real, nx::Int;
+                                        T::Type{<:Real}=Float32, device=gpu_device())
+    return SpectralPhysicsLossParameters(ν, Δt, L, one(T), zero(T), t_step_length, nx; T=T, device=device)
+end
 
-# Arguments
-- `params`: parameters struct, pass nothing to create a zero loss function.
-"""
+function Base.convert(::Type{SpectralPhysicsLossParameters{T}}, p::SpectralPhysicsLossParameters) where T<:Real
+    return SpectralPhysicsLossParameters{T, typeof(p.ik)}(
+        T(p.ν), p.Δt, T(p.L), T(p.x_σ), T(p.x_μ), T(p.t_step_length), p.ik, p.ik2)
+end
+# 1. spectral_derivative: uses precomputed ik/ik2 from params, operates on full array
+function spectral_derivative(u::AbstractArray, params::SpectralPhysicsLossParameters)
+    nx  = size(u, 1)
+    ik  = reshape(params.ik,  length(params.ik),  ntuple(_->1, ndims(u)-1)...)
+    ik2 = reshape(params.ik2, length(params.ik2), ntuple(_->1, ndims(u)-1)...)
+    u_h = rfft(u, 1)
+    ux  = irfft(ik  .* u_h, nx, 1)
+    uxx = irfft(ik2 .* u_h, nx, 1)
+    return ux, uxx
+end
+
+function ChainRulesCore.rrule(::typeof(spectral_derivative), u::AbstractArray,
+                               params::SpectralPhysicsLossParameters)
+    ux, uxx = spectral_derivative(u, params)
+    function spectral_derivative_pullback(Δ)
+        Δux, Δuxx = Δ
+        nx  = size(u, 1)
+        ik  = reshape(params.ik,  length(params.ik),  ntuple(_->1, ndims(u)-1)...)
+        ik2 = reshape(params.ik2, length(params.ik2), ntuple(_->1, ndims(u)-1)...)
+        Δu = irfft(conj(ik)  .* rfft(real.(Δux),  1), nx, 1) .+
+             irfft(conj(ik2) .* rfft(real.(Δuxx), 1), nx, 1)
+        return NoTangent(), Δu, NoTangent()
+    end
+    return (ux, uxx), spectral_derivative_pullback
+end
+
+# 2. spatial_derivative: operates on full array
+function spatial_derivative(u::AbstractArray, params::SpectralPhysicsLossParameters)
+    ux, uxx = spectral_derivative(u, params)
+    return u .* ux, uxx
+end
+
+# 3. spatial_derivatives_batch: no eachslice, pass full array directly
+function spatial_derivatives_batch(states::AbstractArray, params::SpectralPhysicsLossParameters)
+    return spatial_derivative(states, params)
+end
+
+# 4. physics_loss 4D branch: compute spatial derivs on FULL u_t2, slice residual only
 function create_physics_loss(params::SpectralPhysicsLossParameters)
-    # Capture `params` in the closure
-    @views function physics_loss(u::StatefulLuxLayer, u_t1::AbstractArray)
-         # Access params via the captured struct
+    function physics_loss(u::StatefulLuxLayer, u_t1::AbstractArray)
         u_t2 = u(u_t1)
+        u_t2 = u_t2 .* params.x_σ .+ params.x_μ
+        u_t1 = u_t1 .* params.x_σ .+ params.x_μ
+        if ndims(u_t1) == 3
+            ∂u_∂t        = (u_t2 .- u_t1) ./ params.t_step_length
+            ∂f_∂x, ∂u_∂xx = spatial_derivative(u_t2, params)
+        else
+            ∂u_∂t         = (u_t2[:, 3:end, :, :] .- u_t2[:, 1:end-2, :, :]) ./ (2 * params.t_step_length)
+            ∂f_∂x, ∂u_∂xx = spatial_derivatives_batch(u_t2, params)   # full u_t2, no slice
+            # trim spatial results to match interior time points
+            ∂f_∂x  = ∂f_∂x[:,  2:end-1, :, :]
+            ∂u_∂xx = ∂u_∂xx[:, 2:end-1, :, :]
+        end
+        return mean(abs2, ∂u_∂t .+ ∂f_∂x .- params.ν .* ∂u_∂xx)
+    end
+    return physics_loss
+end
+
+function physics_loss(u_t2::AbstractArray, u_t1::AbstractArray, params::SpectralPhysicsLossParameters)
+         # Access params via the captured struct
         u_t2 = u_t2 .* params.x_σ .+ params.x_μ
         u_t1 = u_t1 .* params.x_σ .+ params.x_μ
         if ndims(u_t1) == 3
@@ -140,24 +100,19 @@ function create_physics_loss(params::SpectralPhysicsLossParameters)
             ∂f_∂x, ∂u_∂xx = spatial_derivative(u_t2, params)
             boundary_residual = 0
         else 
-            forward_diff_first = (u_t2[:, 2:2, :, :] .- u_t2[:, 1:1, :, :]) ./ params.t_step_length
-            forward_diff_last = (u_t2[:, end:end, :, :] .- u_t2[:, end-1:end-1, :, :]) ./ params.t_step_length
-            central_diff = (u_t2[:, 3:end, :, :] .- u_t2[:, 1:end-2, :, :]) ./ (2 * params.t_step_length)
-            ∂u_∂t = cat(forward_diff_first, central_diff, forward_diff_last; dims=2)
-            #boundary_residual = u_t2[1:1,:,:,:] .- u_t2[end:end,:,:,:]
-            u_t2_permute =  permutedims(u_t2, (1, 4, 3, 2)) 
+            #forward_diff_first = (u_t2[:, 2:2, :, :] .- u_t2[:, 1:1, :, :]) ./ params.t_step_length
+            #forward_diff_last = (u_t2[:, end:end, :, :] .- u_t2[:, end-1:end-1, :, :]) ./ params.t_step_length
+            ∂u_∂t= (u_t2[:, 3:end, :, :] .- u_t2[:, 1:end-2, :, :]) ./ (2 * params.t_step_length)
+            #∂u_∂t = cat(forward_diff_first, central_diff, forward_diff_last; dims=2) 
             ∂f_∂x, ∂u_∂xx = spatial_derivatives_batch(u_t2, params)
-            ∂f_∂x = permutedims(∂f_∂x, (1, 4, 3, 2))
-            ∂u_∂xx = permutedims(∂u_∂xx, (1, 4, 3, 2))
+            ∂f_∂x  = ∂f_∂x[:,  2:end-1, :, :]
+            ∂u_∂xx = ∂u_∂xx[:, 2:end-1, :, :]
             boundary_residual = 0
         end
         return mean(abs2, ∂u_∂t .+ ∂f_∂x .- (params.ν .* ∂u_∂xx)) + mean(abs2, boundary_residual)
     end
-    return physics_loss    
-end
-
 """
-    FDPhysicsLossParameters(ν::Float64, N_t::Int, t_max::Float64, t_min::Float64, Δt::Float64, x_σ::Float64, x_μ::Float64, M1_gpu::AbstractArray, M2_gpu::AbstractArray)
+    FDPhysicsLossParameters(ν::T, N_t::Int, t_max::T, t_min::T, Δt::T, x_σ::T, x_μ::T, M1_gpu::AbstractArray, M2_gpu::AbstractArray)
 
 Create a struct to hold parameters for finite difference physics loss.
 
@@ -167,18 +122,24 @@ Create a struct to hold parameters for finite difference physics loss.
 - `M1_gpu`: Second derivative FD matrix (GPU array)
 - `M2_gpu`: First derivative FD matrix (GPU array)
 """
-struct FDPhysicsLossParameters
-    ν::Float64
+struct FDPhysicsLossParameters{T} 
+    ν::T
     Δt::Int
-    t_step_length::Float32
-    x_σ::Float64
-    x_μ::Float64
+    t_step_length::T
+    x_σ::T
+    x_μ::T
     M1_gpu::AbstractArray
     M2_gpu::AbstractArray
 end
 
-function FDPhysicsLossParameters(ν::Float64, Δt::Int, t_step_length::Float32, M1_gpu::AbstractArray, M2_gpu::AbstractArray)
-    return FDPhysicsLossParameters(ν, Δt, t_step_length, 1, 0, M1_gpu, M2_gpu)
+function FDPhysicsLossParameters(ν::Real, Δt::Int, t_step_length::Real, x_σ::Real, x_μ::Real, 
+                                  M1_gpu::AbstractArray, M2_gpu::AbstractArray; T::Type{<:Real}=Float32)
+    return FDPhysicsLossParameters{T}(T(ν), Δt, T(t_step_length), T(x_σ), T(x_μ), M1_gpu, M2_gpu)
+end
+
+function FDPhysicsLossParameters(ν::Real, Δt::Int, t_step_length::Real,
+                                  M1_gpu::AbstractArray, M2_gpu::AbstractArray; T::Type{<:Real}=Float32)
+    return FDPhysicsLossParameters(ν, Δt, t_step_length, one(T), zero(T), M1_gpu, M2_gpu; T=T)
 end
 
 function create_physics_loss(params::FDPhysicsLossParameters)
@@ -192,20 +153,41 @@ function create_physics_loss(params::FDPhysicsLossParameters)
             ∂u_∂t = (u_t2 .- u_t1) ./ params.t_step_length
             #boundary_residual = u_t2[1:1,:,:] .- u_t2[end:end,:,:]
             boundary_residual = 0
+            ∂f_∂x, ∂u_∂xx = spatial_derivatives_batch(u_t2, params)
         else 
-            forward_diff_first = (u_t2[:, 2:2, :, :] .- u_t2[:, 1:1, :, :]) ./ params.t_step_length
-            forward_diff_last = (u_t2[:, end:end, :, :] .- u_t2[:, end-1:end-1, :, :]) ./ params.t_step_length
-            central_diff = (u_t2[:, 3:end, :, :] .- u_t2[:, 1:end-2, :, :]) ./ (2 * params.t_step_length)
-            ∂u_∂t = cat(forward_diff_first, central_diff, forward_diff_last; dims=2)
+            #forward_diff_first = (u_t2[:, 2:2, :, :] .- u_t2[:, 1:1, :, :]) ./ params.t_step_length
+            #forward_diff_last = (u_t2[:, end:end, :, :] .- u_t2[:, end-1:end-1, :, :]) ./ params.t_step_length
+            ∂u_∂t= (u_t2[:, 3:end, :, :] .- u_t2[:, 1:end-2, :, :]) ./ (2 * params.t_step_length)
+            #∂u_∂t = cat(forward_diff_first, central_diff, forward_diff_last; dims=2)
             #boundary_residual = u_t2[1:1,:,:,:] .- u_t2[end:end,:,:,:]
             boundary_residual = 0
+            ∂f_∂x, ∂u_∂xx = spatial_derivatives_batch(u_t2[:,2:end-1,:,:], params)
         end
-        ∂f_∂x, ∂u_∂xx = spatial_derivatives_batch(u_t2, params)
+        
         return mean(abs2, ∂u_∂t .+ ∂f_∂x .- (params.ν .* ∂u_∂xx)) + mean(abs2, boundary_residual)
     end
     return BurgersFD_physics_loss
 end
 
+function physics_loss(u_t2::AbstractArray, u_t1::AbstractArray, params::FDPhysicsLossParameters)
+         # Access params via the captured struct
+        u_t2 = u_t2 .* params.x_σ .+ params.x_μ
+        u_t1 = u_t1 .* params.x_σ .+ params.x_μ
+        if ndims(u_t1) == 3
+            ∂u_∂t = (u_t2 .- u_t1) ./ params.t_step_length
+            #boundary_residual = u_t2[1:1,:,:] .- u_t2[end:end,:,:]
+            ∂f_∂x, ∂u_∂xx = spatial_derivatives_batch(u_t2, params)
+            boundary_residual = 0
+        else 
+            #forward_diff_first = (u_t2[:, 2:2, :, :] .- u_t2[:, 1:1, :, :]) ./ params.t_step_length
+            #forward_diff_last = (u_t2[:, end:end, :, :] .- u_t2[:, end-1:end-1, :, :]) ./ params.t_step_length
+            ∂u_∂t= (u_t2[:, 3:end, :, :] .- u_t2[:, 1:end-2, :, :]) ./ (2 * params.t_step_length)
+            #∂u_∂t = cat(forward_diff_first, central_diff, forward_diff_last; dims=2) 
+            ∂f_∂x, ∂u_∂xx = spatial_derivatives_batch(u_t2[:,2:end-1,:,:], params)
+            boundary_residual = 0
+        end
+        return mean(abs2, ∂u_∂t .+ ∂f_∂x .- (params.ν .* ∂u_∂xx)) + mean(abs2, boundary_residual)
+    end
 """
     mse_loss_function(u::StatefulLuxLayer, target::AbstractArray, xt::AbstractArray)
 
@@ -219,10 +201,12 @@ Standard mean squared error loss.
 # Returns
 - MSE between network output and target
 """
-function mse_loss_function(u::StatefulLuxLayer, target::AbstractArray, u_t1::AbstractArray; subsampling::Int=1)
+function mse_loss_function(u::StatefulLuxLayer, target::AbstractArray{T,3}, u_t1::AbstractArray{T,3}; subsampling::Int=1) where T
     return MSELoss()(u(u_t1)[1:subsampling:end,:,:], target[1:subsampling:end,:,:])
 end
-
+function mse_loss_function(u::StatefulLuxLayer, target::AbstractArray{T,4}, u_t1::AbstractArray{T,4}; subsampling::Int=1) where T
+    return MSELoss()(u(u_t1)[1:subsampling:end,1:subsampling:end,:,:], target[1:subsampling:end,1:subsampling:end,:,:])
+end
 function create_physics_loss(::Nothing)
     function physics_loss(u::StatefulLuxLayer, u_t1::AbstractArray)
         return 0.f0
@@ -291,29 +275,10 @@ function spatial_derivatives_batch(states::AbstractArray, params::FDPhysicsLossP
     dims = size(states)
     
     # Maintain batch dimensions for matrix operations
-    ∂f_∂x = reshape(params.M2_gpu * reshape(states, dims[1], :), dims)
+    f = states.^2 ./ 2
+    ∂f_∂x = reshape(params.M2_gpu * reshape(f, dims[1], :), dims)
     ∂u_∂xx = reshape(params.M1_gpu * reshape(states, dims[1], :), dims)
-    
     return ∂f_∂x, ∂u_∂xx
-end
-function spatial_derivatives_batch(states::AbstractArray, params::ESM_PINO.SpectralPhysicsLossParameters)
-    
-    results = map(x -> spatial_derivative(x, params), eachslice(states; dims=4))
-
-    df_dx_batch = cat(map(res -> res[1], results)...; dims=4)
-    d2u_dx2_batch = cat(map(res -> res[2], results)...; dims=4)
-    return df_dx_batch, d2u_dx2_batch
-end
-
-function spatial_derivative(u_t2::AbstractArray, params::ESM_PINO.SpectralPhysicsLossParameters)
-    _, d2u_dx2 = ESM_PINO.spectral_derivative(u_t2, params.L)
-    f = u_t2.^2 ./ 2
-    f_hat = fft(f)
-    f_hat = ESM_PINO.dealias(f_hat, params.L) 
-    k = ESM_PINO.compute_k(f, params.L)
-    df_dx_hat = im .* k .* f_hat
-    df_dx = real(ifft(df_dx_hat))
-    return df_dx, d2u_dx2
 end
 
 function create_autoregressive_loss_function(params::FDPhysicsLossParameters)

@@ -141,7 +141,7 @@ struct SpectralKernel{T,N} <: Lux.AbstractLuxContainerLayer{(:spatial_conv,:spec
 end
 
 function SpectralKernel(in_ch::Integer, out_ch::Integer, modes::NTuple{N,Integer};
-                        inner_mixing::Bool=true,
+                        inner_mixing::Bool=false,
                         use_norm::Bool=false,
                         bias::Bool=false) where N
     if inner_mixing 
@@ -159,7 +159,7 @@ function SpectralKernel(in_ch::Integer, out_ch::Integer, modes::NTuple{N,Integer
     return SpectralKernel(conv, spectral, norm)
 end
 
-function SpectralKernel(ch::Pair{<:Integer,<:Integer}, modes::NTuple{N,Integer}; inner_mixing::Bool=true,
+function SpectralKernel(ch::Pair{<:Integer,<:Integer}, modes::NTuple{N,Integer}; inner_mixing::Bool=false,
                         use_norm::Bool=false,
                         bias::Bool=false) where N
     in_ch, out_ch = ch

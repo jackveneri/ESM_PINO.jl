@@ -13,6 +13,8 @@ include("Spherical_Conv.jl")
 include("SFNO_components.jl")
 include("FNO.jl")
 include("SFNO.jl")
+include("RKFNO.jl")
+include("RKSFNO.jl")
 
-export ChannelMLP, SoftGating, GridEmbedding, FourierNeuralOperator, SFNO, GaussianGridEmbedding2D
+export ChannelMLP, SoftGating, GridEmbedding, FourierNeuralOperator, SFNO, GaussianGridEmbedding2D, RKFNO, RKSFNO
 end

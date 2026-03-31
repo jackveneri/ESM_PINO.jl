@@ -76,7 +76,7 @@ N_sim = 1000
 N = 512          
 tspan = (0.0, 3.0)
 N_t = 1024
-ts = collect(tspan[1]:tspan[2]/(N_t-1):tspan[2])
+ts = collect(tspan[1]:(tspan[2]-tspan[1])/(N_t-1):tspan[2])
 
 # Preallocate a 3D array with dimensions (time, space, simulation)
 results = Array{Float64}(undef, N_t, N, N_sim)
