@@ -11,6 +11,7 @@
 /examples/speedy_experiment.jl
 /examples/ArgParse_test.jl
 /examples/SH_plots.jl
+/examples/Compare_Spherical_Conv.jl
 /figures
 /data/Manifest.toml
 /data/burgers_results.jld2
