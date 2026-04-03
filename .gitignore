@@ -1,0 +1,17 @@
+/Manifest.toml
+/docs/Manifest.toml
+/docs/build/
+/data/ERA5-sf-t21q.nc
+/examples/Manifest.toml
+/data/t21_qg3_data_SH_CPU.jld2
+/data/t42_qg3_data_SH_CPU.jld2
+/data/burgers_results.jld2
+/data/burgers_results_test.jld2
+/examples/experiment.jl
+/examples/plotting_tests.jl
+/examples/speedy_experiment.jl
+/examples/ArgParse_test.jl
+/examples/SH_plots.jl
+/data/Manifest.toml
+/models/
+/data/qg3_data.jl
