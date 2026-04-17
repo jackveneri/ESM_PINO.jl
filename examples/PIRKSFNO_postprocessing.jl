@@ -54,10 +54,10 @@ ESM_PINO.analyze_weights(ps)
 
 sol = ESM_PINO.normalize_data(sol, μ, σ)
 N_test = 100
-model_channels = model.lifting.layers.layer_1.in_chs
+model_channels = model.sfno.lifting.layers.layer_1.in_chs
 shgg2 = QG3.SHtoGaussianGridTransform(qg3ppars, model_channels, N_batch=N_test)
 ggsh2 = QG3.GaussianGridtoSHTransform(qg3ppars, model_channels, N_batch=N_test)
-test_model = ESM_PINOQG3.transfer_SFNO_model(model, qg3ppars, batch_size=N_test)
+test_model = ESM_PINOQG3.transfer_RKSFNO_model(model, qg3ppars, batch_size=N_test)
 ps, st = transfer_data(ps, dev), transfer_data(st, dev)
 
 trained_u = Lux.testmode(StatefulLuxLayer{true}(test_model, ps, st))
@@ -83,7 +83,7 @@ println("One-step Relative L2 Error: ", one_step_L2_rel_err)
 
 q_test_rollout = q_test_array[:, :, :, 2:2]
 
-test_model_autoreg = ESM_PINOQG3.transfer_SFNO_model(model, qg3ppars, batch_size=1)
+test_model_autoreg = ESM_PINOQG3.transfer_RKSFNO_model(model, qg3ppars, batch_size=1)
 trained_u_autoreg = Lux.testmode(StatefulLuxLayer{true}(test_model_autoreg, ps, st))
 
 function prepare_plot_data(q_pred::AbstractArray{T,4}, qg3p::QG3Model, ggsh2::QG3.GaussianGridtoSHTransform, shgg2::QG3.SHtoGaussianGridTransform; dev=cpu_device()) where T

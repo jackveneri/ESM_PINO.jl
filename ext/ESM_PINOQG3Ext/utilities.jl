@@ -70,6 +70,47 @@ function transfer_SFNO_model(model::ESM_PINO.SFNO, qg3ppars::QG3ModelParameters;
         )
     return superres_model
 end
+function transfer_RKSFNO_model(model::ESM_PINO.RKSFNO, qg3ppars::QG3ModelParameters; 
+    batch_size::Int=typeof(model.sfno.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh).parameters[end] ? 
+    model.sfno.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[4] : 
+    model.sfno.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.sz[4], 
+    gpu::Union{Nothing, Bool}=nothing
+)
+    projection_layers = model.sfno.projection.layers
+    last_layer_index = length(projection_layers)  # or fieldcount(typeof(projection_layers))
+    out_channels = projection_layers[last_layer_index].out_chs
+    if typeof(model.sfno.embedding) <: SpectralPositionEmbedding
+        positional_embedding = "spectral"
+    elseif typeof(model.sfno.embedding) <: ESM_PINO.GridEmbedding
+        positional_embedding = "grid"
+    elseif typeof(model.sfno.embedding)  <: ESM_PINO.GaussianGridEmbedding2D
+        positional_embedding = "gaussian_grid"
+    else
+        positional_embedding = "no_grid"
+    end
+    superres_model = RKSFNO(qg3ppars,
+        batch_size = batch_size,
+        modes = model.sfno.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.modes,
+        in_channels = model.sfno.lifting.layers.layer_1.in_chs,
+        out_channels = out_channels,
+        hidden_channels = model.sfno.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.hidden_channels,
+        n_layers = length(model.sfno.sfno_blocks.layers),
+        lifting_channel_ratio=model.sfno.lifting_channel_ratio,
+        projection_channel_ratio=model.sfno.projection_channel_ratio,
+        channel_mlp_expansion=model.sfno.sfno_blocks.layers.layer_1.channel_mlp.expansion_factor,
+        activation = model.sfno.sfno_blocks.layers.layer_1.activation,
+        positional_embedding = positional_embedding,
+        gpu = isnothing(gpu) ?
+            Base.unwrap_unionall(typeof(model.sfno.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh)).parameters[end]
+        : gpu ,
+        operator_type = model.sfno.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.operator_type,
+        inner_skip = model.sfno.sfno_blocks.layers.layer_1.skip,
+        outer_skip = model.sfno.outer_skip,
+        use_norm = model.sfno.sfno_blocks.layers.layer_1.spherical_kernel.norm == NoOpLayer() ? false : true,
+        #downsampling_factor= model.sfno.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[2] ÷ model.sfno.sfno_blocks.layers.layer_2.spherical_kernel.spherical_conv.plan.ggsh.FT_4d.plan.input_size[2]
+        )
+    return superres_model
+end
 """
 $(TYPEDSIGNATURES)
 
