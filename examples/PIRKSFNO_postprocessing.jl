@@ -8,7 +8,7 @@ include(string(dir,"/plotting_utils.jl"))
 # Determine device type and setup
 function get_device(model)
     # Check if model parameters are on GPU
-    gpu = typeof(model.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh).parameters[end]
+    gpu = typeof(model.sfno.sfno_blocks.layers.layer_1.spherical_kernel.spherical_conv.plan.ggsh).parameters[end]
     if gpu
         CUDA.functional() || error("Model is GPU-based but CUDA is not available")
         QG3.gpuon()
