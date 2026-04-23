@@ -87,4 +87,4 @@ model = fine_tuned_model.model
 ps = cdev(fine_tuned_model.ps)
 st = cdev(fine_tuned_model.st)
 
-@save joinpath(root, "models/RKFNO_results.jld2") model ps st dt N_sims μ σ res
+@save joinpath(root, "models/PIRKFNO_results.jld2") model ps st dt N_sims μ σ res
