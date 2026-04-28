@@ -127,23 +127,24 @@ function create_animation(data, filename, title_template, clims, ilvl, dev, qg3p
     lats = rad2deg.(qg3ppars.lats)    # Latitude 
     fig = Figure()
     ax = GeoAxis(fig[1, 1], dest="+proj=moll")
-    data_obs = Observable(permutedims(data[ilvl,:,:,1],(2,1)))
+    data_obs = Observable(Array(permutedims(data[ilvl,:,:,1],(2,1))))
     hm = GeoMakie.surface!(ax, lons, lats, data_obs, colorrange=clims, colormap=:balance)
     lines!(ax, GeoMakie.coastlines(ax), color=:black, overdraw=true)
     Colorbar(fig[1, 2], hm)
     
     GeoMakie.record(fig, filename, plot_times; framerate=20) do it
-        data_obs[] = permutedims(data[ilvl,:,:,it],(2,1))
+        data_obs[] = Array(permutedims(data[ilvl,:,:,it],(2,1)))
         ax.title = title_template * @sprintf(" at time = %d - %.2f d", it, it * qg3ppars.time_unit)
     end
 end
 
 for ilvl in 1:3
-    clims = (-1.1 * maximum(abs.(q_plot_pred[ilvl,:,:,:])), 1.1 * maximum(abs.(q_plot_pred[ilvl,:,:,:])))
+    scale = quantile(vec(abs.(to_array(u_plot_pred[ilvl,:,:,:], dev))), 0.995)
+    clims = (-scale, scale)
     
     # Prediction animation
     create_animation(
-        q_plot_pred, 
+        u_plot_pred, 
         string(root, "/figures/", model_string, "_prediction_fps20_sf_lvl$(ilvl).gif"),
         model_string * " Prediction",
         clims, ilvl, dev, qg3ppars
@@ -151,16 +152,17 @@ for ilvl in 1:3
     
     # Error animation  
     create_animation(
-        mistake_q,
+        mistake_u,
         string(root, "/figures/", model_string, "_error_fps20_sf_lvl$(ilvl).gif"),
         model_string * " Error",
         clims, ilvl, dev, qg3ppars
     )
 
-    @printf "%s Percentual Error L2 norm at level %1d: %.9f\n" model_string ilvl loss_q[ilvl]
+    @printf "%s Percentual Error L2 norm at level %1d: %.9f\n" model_string ilvl loss_u[ilvl]
 end
 
-sf_plot_evolved = to_array(sf_plot_evolved, dev)
+u_plot_evolved = to_array(u_plot_evolved, dev)
+v_plot_evolved = to_array(v_plot_evolved, dev)
 
 # Long rollout
 n_days = 10
@@ -172,24 +174,26 @@ time_scale_adjust = Int(round(long_rollout_t_steps / (snapshots-1)))
 ggsh3 = QG3.GaussianGridtoSHTransform(qg3ppars, model_channels, N_batch=snapshots)
 shgg3 = QG3.SHtoGaussianGridTransform(qg3ppars, model_channels, N_batch=snapshots)
 
-q_stable = ESM_PINO.apply_n_times(trained_u, q_test_rollout, long_rollout_iter; m=snapshots, μ=μ, σ=σ)
+q_stable = ESM_PINO.apply_n_times(trained_u_autoreg, q_test_rollout, long_rollout_iter; m=snapshots, μ=μ, σ=σ)
 q_stable = cat(q_stable..., dims=4)
-q_stable_plot_pred, sf_stable_plot_pred = prepare_plot_data(q_stable, qg3p, ggsh3, shgg3; dev=dev)
+u_stable_plot_pred, v_stable_plot_pred = prepare_plot_data(q_stable, qg3p, ggsh3, shgg3; dev=dev)
 
 for ilvl in 1:3
-    plot_times = 1:size(q_stable_plot_pred, 4)
+    plot_times = 1:size(u_stable_plot_pred, 4)
     lons = range(-180,180,qg3ppars.N_lons)    # Longitude 
     lats = rad2deg.(qg3ppars.lats)    # Latitude 
-    clims = (-1.1 * maximum(abs.(q_stable_plot_pred[ilvl,:,:,:])), 1.1 * maximum(abs.(q_stable_plot_pred[ilvl,:,:,:])))
+    scale = quantile(vec(abs.(to_array(u_stable_plot_pred[ilvl,:,:,:], dev))), 0.995)
+    clims = (-scale, scale)
     fig_pred = Figure()
     ax_pred = GeoAxis(fig_pred[1, 1], dest="+proj=moll")
-    data_obs_pred = Observable(permutedims(q_stable_plot_pred[ilvl,:,:,1],(2,1)))
+    data_obs_pred = Observable(Array(permutedims(u_stable_plot_pred[ilvl,:,:,1],(2,1))))
     hm_pred = GeoMakie.surface!(ax_pred,lons, lats, data_obs_pred, colorrange=clims, colormap=:balance)
+    lines!(ax_pred, GeoMakie.coastlines(ax_pred), color=:black, overdraw=true)
     Colorbar(fig_pred[1, 2], hm_pred)
 
     GeoMakie.record(fig_pred, string(root, "/figures/", model_string, "_stability_fps20_sf_lvl$(ilvl).gif"), 
                      plot_times; framerate=5) do it
-        data_obs_pred[] = permutedims(q_stable_plot_pred[ilvl,:,:,it],(2,1))
+        data_obs_pred[] = Array(permutedims(u_stable_plot_pred[ilvl,:,:,it],(2,1)))
         ax_pred.title = model_string * @sprintf(" Prediction at time = %d - %.2f days", it, 
                          it * qg3ppars.time_unit * time_scale_adjust)
     end
